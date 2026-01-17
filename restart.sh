@@ -41,14 +41,15 @@ if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
 fi
 
 rm -f .ode.pid
-
-# Clean up any orphaned opencode processes
-pkill -f "opencode serve" 2>/dev/null || true
+rm -f .ode.pgid
 
 # Start new process
 echo "[restart] Starting new process..."
-nohup bash -c "
+setsid bash -c "
 cd '$SCRIPT_DIR'
+export PATH=\"\$HOME/.bun/bin:\$PATH\"
+# Save our process group ID for cleanup
+echo \$\$ > .ode.pgid
 while true; do
     echo '[keepalive] Starting bun process...'
     bun run src/index.ts
