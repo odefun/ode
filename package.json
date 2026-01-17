@@ -9,8 +9,7 @@
     "start": "bun run src/index.ts",
     "dev": "bun --watch run src/index.ts",
     "daemon": "nodemon",
-    "typecheck": "tsc --noEmit",
-    "postinstall": "mkdir -p node_modules/@opencode-ai && ln -sf $(realpath ../opencode/packages/sdk/js) node_modules/@opencode-ai/sdk"
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/bun": "latest",
@@ -19,6 +18,7 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
+    "@opencode-ai/sdk": "^1.1.25",
     "@slack/bolt": "^4.6.0",
     "@slack/socket-mode": "^2.0.5",
     "@slack/web-api": "^7.13.0",

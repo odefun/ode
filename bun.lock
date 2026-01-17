@@ -5,6 +5,7 @@
     "": {
       "name": "ode",
       "dependencies": {
+        "@opencode-ai/sdk": "^1.1.25",
         "@slack/bolt": "^4.6.0",
         "@slack/socket-mode": "^2.0.5",
         "@slack/web-api": "^7.13.0",
@@ -21,6 +22,8 @@
     },
   },
   "packages": {
+    "@opencode-ai/sdk": ["@opencode-ai/sdk@1.1.25", "", {}, "sha512-mWUX489ArEF2ICg3iZsx2VQaGS3Z2j/dwAJDacao9t7dGDzjOIaacPw2weZ10zld7XmT9V9C0PM/A5lDZ52J+w=="],
+
     "@pinojs/redact": ["@pinojs/redact@0.4.0", "", {}, "sha512-k2ENnmBugE/rzQfEcdWHcCY+/FM3VLzH9cYEsbdsoqrvzAKRhUZeRNhAZvB8OitQJ1TBed3yqWtdjzS6wJKBwg=="],
 
     "@slack/bolt": ["@slack/bolt@4.6.0", "", { "dependencies": { "@slack/logger": "^4.0.0", "@slack/oauth": "^3.0.4", "@slack/socket-mode": "^2.0.5", "@slack/types": "^2.18.0", "@slack/web-api": "^7.12.0", "axios": "^1.12.0", "express": "^5.0.0", "path-to-regexp": "^8.1.0", "raw-body": "^3", "tsscmp": "^1.0.6" }, "peerDependencies": { "@types/express": "^5.0.0" } }, "sha512-xPgfUs2+OXSugz54Ky07pA890+Qydk22SYToi8uGpXeHSt1JWwFJkRyd/9Vlg5I1AdfdpGXExDpwnbuN9Q/2dQ=="],
