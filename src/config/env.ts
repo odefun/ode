@@ -13,9 +13,6 @@ const envSchema = z.object({
   // Working directory
   DEFAULT_CWD: z.string().default(process.cwd()),
 
-  // Coding agent selection
-  CODING_AGENT: z.enum(["opencode", "claude"]).default("opencode"),
-
   // OAuth callback handling
   OAUTH_CALLBACK_PORT: z.coerce.number().default(3000),
 

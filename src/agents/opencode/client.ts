@@ -62,7 +62,7 @@ async function withSessionLock<T>(
 ): Promise<T> {
   const existing = sessionLocks.get(sessionKey);
   if (existing) {
-    await existing.catch(() => {});
+    await existing.catch(() => { });
   }
 
   const promise = fn();
@@ -183,7 +183,7 @@ export async function sendMessage(
       const model =
         overrides?.provider && overrides?.model
           ? { providerID: overrides.provider, modelID: overrides.model }
-          : options?.model;
+          : { providerID: 'openai', modelID: 'gpt-5.2-codex' };
 
       // Build message parts
       const parts = buildPromptParts(channelId, message, { ...options, agent }, context);
@@ -450,4 +450,3 @@ export async function cancelActiveRequest(
   }
   return false;
 }
-
