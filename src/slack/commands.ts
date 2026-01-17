@@ -19,7 +19,8 @@ import { abortSession } from "../agents";
 export function setupInteractiveHandlers(): void {
   const slackApp = getApp();
 
-  // Handle /start actions
+  // Handle /start action buttons
+
   slackApp.action("config_edit", async ({ ack, body, client }) => {
     await ack();
     const channelId = (body as any).channel?.id;
