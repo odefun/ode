@@ -8,7 +8,7 @@ export {
   type MessageContext,
 } from "./client";
 
-export { setupSlashCommands, setupInteractiveHandlers } from "./commands";
+export { setupInteractiveHandlers } from "./commands";
 
 export { startOAuthFlow, stopOAuthServer, processOAuthCallback } from "./oauth";
 

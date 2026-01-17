@@ -1,7 +1,6 @@
 import {
   createSlackApp,
   setupMessageHandlers,
-  setupSlashCommands,
   setupInteractiveHandlers,
   stopOAuthServer,
   recoverPendingRequests,
@@ -26,8 +25,6 @@ async function main(): Promise<void> {
   setupMessageHandlers();
   log.info("Message handlers registered");
 
-  setupSlashCommands();
-  log.info("Slash commands registered");
 
   setupInteractiveHandlers();
   log.info("Interactive handlers registered");

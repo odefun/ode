@@ -1096,8 +1096,7 @@ export async function recoverPendingRequests(): Promise<void> {
   clearPendingRestartMessages();
 }
 
-// Handle stop command
-async function handleStopCommand(
+export async function handleStopCommand(
   channelId: string,
   threadId: string,
   client: SlackClient
@@ -1349,6 +1348,72 @@ export function setupMessageHandlers(): void {
       user: userId,
       text: cleanText.slice(0, 100) + (cleanText.length > 100 ? "..." : ""),
     });
+
+    if (cleanText.toLowerCase().startsWith("/start")) {
+      await say({
+        text: "How can I help you?",
+        thread_ts: threadId,
+        blocks: [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: "How can I help you?",
+            },
+          },
+          {
+            type: "actions",
+            elements: [
+              {
+                type: "button",
+                text: { type: "plain_text", text: "Configure" },
+                value: "config_edit",
+                action_id: "config_edit",
+              },
+              {
+                type: "button",
+                text: { type: "plain_text", text: "Agent Instructions" },
+                value: "agents_edit",
+                action_id: "agents_edit",
+              },
+              {
+                type: "button",
+                text: { type: "plain_text", text: "OpenAI Codex Auth" },
+                value: "codex_auth",
+                action_id: "codex_auth",
+              },
+              {
+                type: "button",
+                text: { type: "plain_text", text: "GitHub Auth" },
+                value: "gh_auth",
+                action_id: "gh_auth",
+              },
+              {
+                type: "button",
+                text: { type: "plain_text", text: "Help" },
+                value: "help",
+                action_id: "help",
+              },
+              {
+                type: "button",
+                text: { type: "plain_text", text: "Stop" },
+                value: "stop",
+                action_id: "stop_ode",
+                style: "danger",
+              },
+              {
+                type: "button",
+                text: { type: "plain_text", text: "Restart" },
+                value: "restart",
+                action_id: "restart_ode",
+                style: "danger",
+              },
+            ],
+          },
+        ],
+      });
+      return;
+    }
 
     if (!cleanText) {
       await say({

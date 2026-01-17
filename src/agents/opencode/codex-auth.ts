@@ -353,7 +353,7 @@ export async function completeCodexAuthManual(callbackUrl: string): Promise<void
   log.info("Processing manual OAuth callback", { urlLength: callbackUrl.length });
 
   if (!pendingOAuth) {
-    throw new Error("No pending OAuth flow. Please start again with /ode oauth");
+    throw new Error("No pending OAuth flow. Use @ode /start to open setup and start OAuth again.");
   }
 
   // Parse the callback URL
@@ -372,7 +372,7 @@ export async function completeCodexAuthManual(callbackUrl: string): Promise<void
         throw new Error(errorDescription || error);
       }
     } catch (err) {
-      if (err instanceof Error && err.message !== "No pending OAuth flow. Please start again with /ode oauth") {
+      if (err instanceof Error && err.message !== "No pending OAuth flow. Use @ode /start to open setup and start OAuth again.") {
         throw err;
       }
       // Not a valid URL, treat as code

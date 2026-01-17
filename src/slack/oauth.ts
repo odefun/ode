@@ -27,7 +27,7 @@ export async function startOAuthFlow(
             type: "section",
             text: {
               type: "mrkdwn",
-              text: "You're already authenticated with OpenAI Codex. Use `/ode config edit` to select the `openai` provider and `gpt-5.2-codex` model.",
+              text: "You're already authenticated with OpenAI Codex. Use @ode /start to open setup and select the openai provider and gpt-5.2-codex model.",
             },
           },
         ],
@@ -136,7 +136,7 @@ export async function handleCodexOAuthCallback(
 
     await client.chat.postMessage({
       channel: channelId,
-      text: "Successfully authenticated with OpenAI Codex! Use `/ode config edit` to set provider to `openai` and model to `gpt-5.2-codex`.",
+      text: "Successfully authenticated with OpenAI Codex! Use @ode /start to open setup and set provider to openai and model to gpt-5.2-codex.",
     });
   } catch (err) {
     log.error("OAuth callback failed", { error: String(err) });
@@ -169,7 +169,7 @@ export async function completeOAuth(
   if (isCodexAuthenticated()) {
     await client.chat.postMessage({
       channel: channelId,
-      text: "Successfully authenticated with OpenAI Codex! Use `/ode config edit` to set provider to `openai` and model to `gpt-5.2-codex`.",
+      text: "Successfully authenticated with OpenAI Codex! Use @ode /start to open setup and set provider to openai and model to gpt-5.2-codex.",
     });
   } else {
     await client.chat.postMessage({
@@ -198,7 +198,7 @@ export async function processOAuthCallback(
   } else {
     await client.chat.postMessage({
       channel: channelId,
-      text: "No pending OAuth flow. Please start again with `/ode oauth`.",
+      text: "No pending OAuth flow. Use @ode /start to open setup and start OAuth again.",
     });
   }
 }

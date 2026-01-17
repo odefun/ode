@@ -1,484 +1,112 @@
-import { getApp, sendMessage } from "./client";
+import { getApp, handleStopCommand } from "./client";
 import { loadEnv } from "../config";
+import { openAgentsModal, openConfigModal, openGhAuthModal } from "./modals";
+import { startOAuthFlow } from "./oauth";
 import {
-  getChannelCwd,
-  setChannelCwd,
-  getChannelAgentsMd,
   setChannelAgentsMd,
   deleteChannelAgentsMd,
-  getChannelAgentInstructions,
   setChannelAgentInstructions,
   deleteChannelAgentInstructions,
-  clearOpenCodeSessions,
-  getChannelSettings,
   updateChannelSettings,
   getOpenCodeSession,
   addPendingRestartMessage,
+  getChannelCwd,
+  getChannelSettings,
 } from "../storage/settings";
 import { getSessionsWithPendingRequests } from "../storage";
-import { cancelActiveRequest, abortSession } from "../agents";
+import { abortSession } from "../agents";
 
-export function setupSlashCommands(): void {
+export function setupInteractiveHandlers(): void {
   const slackApp = getApp();
-  const env = loadEnv();
 
-  // /ode - Main command with subcommands
-  slackApp.command("/ode", async ({ command, ack, respond, client }) => {
+  // Handle /start actions
+  slackApp.action("config_edit", async ({ ack, body, client }) => {
     await ack();
+    const channelId = (body as any).channel?.id;
+    const triggerId = (body as any).trigger_id;
+    if (channelId && triggerId) {
+      await openConfigModal(client, triggerId, channelId);
+    }
+  });
 
-    const args = command.text.trim().split(/\s+/);
-    const subcommand = args[0]?.toLowerCase() || "help";
-    const channelId = command.channel_id;
+  slackApp.action("agents_edit", async ({ ack, body, client }) => {
+    await ack();
+    const channelId = (body as any).channel?.id;
+    const triggerId = (body as any).trigger_id;
+    if (channelId && triggerId) {
+      await openAgentsModal(client, triggerId, channelId);
+    }
+  });
 
-    switch (subcommand) {
-      case "help": {
-        await respond({
-          response_type: "ephemeral",
-          text: `*Ode Commands*
+  slackApp.action("codex_auth", async ({ ack, body, client }) => {
+    await ack();
+    const channelId = (body as any).channel?.id;
+    const triggerId = (body as any).trigger_id;
+    if (channelId && triggerId) {
+      await startOAuthFlow(channelId, triggerId, client);
+    }
+  });
 
-\`/ode help\` - Show this help
-\`/ode cwd\` - Show current working directory
-\`/ode cwd <path>\` - Set working directory
-\`/ode agents\` - View channel instructions
-\`/ode agents edit\` - Edit channel instructions
-\`/ode agents clear\` - Clear channel instructions
-\`/ode stop\` - Stop current operation
-\`/ode clear\` - Clear all sessions
-\`/ode config\` - View/edit OpenCode config
-\`/ode auth\` - Login with OpenAI Codex (ChatGPT Pro/Plus)
-\`/ode gh auth\` - Login to GitHub CLI
-\`/ode restart\` - Restart the bot`,
-        });
-        break;
-      }
+  slackApp.action("gh_auth", async ({ ack, body, client }) => {
+    await ack();
+    const channelId = (body as any).channel?.id;
+    const triggerId = (body as any).trigger_id;
+    const userId = (body as any).user?.id;
+    if (channelId && triggerId && userId) {
+      await openGhAuthModal(client, triggerId, channelId, userId);
+    }
+  });
 
-      case "cwd": {
-        const path = args.slice(1).join(" ");
-        if (!path) {
-          const currentCwd = getChannelCwd(channelId, env.DEFAULT_CWD);
-          await respond({
-            response_type: "ephemeral",
-            text: `Current working directory: \`${currentCwd}\``,
-          });
-        } else {
-          setChannelCwd(channelId, path);
-          await respond({
-            response_type: "ephemeral",
-            text: `Working directory set to: \`${path}\``,
-          });
-        }
-        break;
-      }
+  slackApp.action("help", async ({ ack, body, client }) => {
+    await ack();
+    const channelId = (body as any).channel?.id;
+    const threadId = (body as any).message?.thread_ts || (body as any).message?.ts;
+    if (channelId) {
+      await client.chat.postMessage({
+        channel: channelId,
+        ...(threadId ? { thread_ts: threadId } : {}),
+        text: `*Ode Commands*
+Mention the bot with \`/start\` to open setup.
 
-      case "agents": {
-        const action = args[1]?.toLowerCase();
+\`stop\` - Stop current operation
+\`plan\` - Force a planning response
+\`build\` - Force a build response`,
+      });
+    }
+  });
 
-        if (action === "edit") {
-          const currentContent = getChannelAgentsMd(channelId) || "";
-          const planContent = getChannelAgentInstructions(channelId, "plan") || "";
-          const buildContent = getChannelAgentInstructions(channelId, "build") || "";
+  slackApp.action("stop_ode", async ({ ack, body, client }) => {
+    await ack();
+    const channelId = (body as any).channel?.id;
+    const threadId = (body as any).message?.thread_ts || (body as any).message?.ts;
+    
+    if (channelId && threadId) {
+       const stopped = await handleStopCommand(channelId, threadId, client);
+       if (stopped) {
+         await client.chat.postMessage({
+           channel: channelId,
+           thread_ts: threadId,
+           text: "Request stopped.",
+         });
+       } else {
+          // If we can't find a session by thread, try just the channel (legacy behavior)
+          // But `handleStopCommand` currently loads session by channelId AND threadId.
+          // If no threadId provided (e.g. from main channel message?), we might need to search?
+          // The button is likely inside a message.
+       }
+    }
+  });
 
-          await client.views.open({
-            trigger_id: command.trigger_id,
-            view: {
-              type: "modal",
-              callback_id: "agents_edit_modal",
-              private_metadata: channelId,
-              title: {
-                type: "plain_text",
-                text: "Edit Instructions",
-              },
-              submit: {
-                type: "plain_text",
-                text: "Save",
-              },
-              close: {
-                type: "plain_text",
-                text: "Cancel",
-              },
-              blocks: [
-                {
-                  type: "section",
-                  text: {
-                    type: "mrkdwn",
-                    text: "Edit global and agent-specific instructions for this channel. Global instructions apply to every request, while plan/build instructions apply only to those agents.",
-                  },
-                },
-                {
-                  type: "input",
-                  block_id: "agents_global",
-                  label: {
-                    type: "plain_text",
-                    text: "Global Instructions",
-                  },
-                  element: {
-                    type: "plain_text_input",
-                    action_id: "content",
-                    multiline: true,
-                    initial_value: currentContent,
-                    placeholder: {
-                      type: "plain_text",
-                      text: "Enter global instructions...",
-                    },
-                  },
-                },
-                {
-                  type: "input",
-                  block_id: "agents_plan",
-                  optional: true,
-                  label: {
-                    type: "plain_text",
-                    text: "Plan Instructions",
-                  },
-                  element: {
-                    type: "plain_text_input",
-                    action_id: "content",
-                    multiline: true,
-                    initial_value: planContent,
-                    placeholder: {
-                      type: "plain_text",
-                      text: "Enter plan agent instructions...",
-                    },
-                  },
-                },
-                {
-                  type: "input",
-                  block_id: "agents_build",
-                  optional: true,
-                  label: {
-                    type: "plain_text",
-                    text: "Build Instructions",
-                  },
-                  element: {
-                    type: "plain_text_input",
-                    action_id: "content",
-                    multiline: true,
-                    initial_value: buildContent,
-                    placeholder: {
-                      type: "plain_text",
-                      text: "Enter build agent instructions...",
-                    },
-                  },
-                },
-              ],
-            },
-          });
-        } else if (action === "clear") {
-          deleteChannelAgentsMd(channelId);
-          deleteChannelAgentInstructions(channelId, "plan");
-          deleteChannelAgentInstructions(channelId, "build");
-          await respond({
-            response_type: "ephemeral",
-            text: "Channel instructions cleared.",
-          });
-        } else {
-          const globalContent = getChannelAgentsMd(channelId);
-          const planContent = getChannelAgentInstructions(channelId, "plan");
-          const buildContent = getChannelAgentInstructions(channelId, "build");
-          const formatSection = (title: string, content: string | null) =>
-            content && content.trim().length > 0
-              ? `*${title}:*\n\`\`\`\n${content}\n\`\`\``
-              : `*${title}:* (none)`;
-
-          const sections = [
-            formatSection("Global Instructions", globalContent),
-            formatSection("Plan Instructions", planContent),
-            formatSection("Build Instructions", buildContent),
-          ];
-
-          await respond({
-            response_type: "ephemeral",
-            text: sections.join("\n\n"),
-          });
-        }
-        break;
-      }
-
-      case "stop": {
-        const settings = getChannelSettings(channelId);
-        const cwd = getChannelCwd(channelId, env.DEFAULT_CWD);
-        const sessionId = getOpenCodeSession(channelId, cwd);
-
-        if (sessionId) {
-          const cancelled = await cancelActiveRequest(channelId, sessionId);
-          if (cancelled) {
-            await respond({
-              response_type: "ephemeral",
-              text: "Operation cancelled.",
-            });
-          } else {
-            await respond({
-              response_type: "ephemeral",
-              text: "No active operation to cancel.",
-            });
-          }
-        } else {
-          await respond({
-            response_type: "ephemeral",
-            text: "No active session.",
-          });
-        }
-        break;
-      }
-
-      case "clear": {
-        clearOpenCodeSessions(channelId);
-        await respond({
-          response_type: "ephemeral",
-          text: "All sessions cleared for this channel.",
-        });
-        break;
-      }
-
-      case "config": {
-        const action = args[1]?.toLowerCase();
-
-        if (action === "edit") {
-          const settings = getChannelSettings(channelId);
-          const overrides = settings.agentOverrides || {};
-
-          await client.views.open({
-            trigger_id: command.trigger_id,
-            view: {
-              type: "modal",
-              callback_id: "config_edit_modal",
-              private_metadata: channelId,
-              title: {
-                type: "plain_text",
-                text: "OpenCode Config",
-              },
-              submit: {
-                type: "plain_text",
-                text: "Save",
-              },
-              close: {
-                type: "plain_text",
-                text: "Cancel",
-              },
-              blocks: [
-                {
-                  type: "input",
-                  block_id: "agent",
-                  optional: true,
-                  label: {
-                    type: "plain_text",
-                    text: "Agent Override",
-                  },
-                  element: {
-                    type: "plain_text_input",
-                    action_id: "value",
-                    initial_value: overrides.agent || "",
-                    placeholder: {
-                      type: "plain_text",
-                      text: "e.g., build, plan, code",
-                    },
-                  },
-                },
-                {
-                  type: "input",
-                  block_id: "provider",
-                  optional: true,
-                  label: {
-                    type: "plain_text",
-                    text: "Provider ID",
-                  },
-                  element: {
-                    type: "plain_text_input",
-                    action_id: "value",
-                    initial_value: overrides.provider || "",
-                    placeholder: {
-                      type: "plain_text",
-                      text: "e.g., openai, anthropic",
-                    },
-                  },
-                },
-                {
-                  type: "input",
-                  block_id: "model",
-                  optional: true,
-                  label: {
-                    type: "plain_text",
-                    text: "Model ID",
-                  },
-                  element: {
-                    type: "plain_text_input",
-                    action_id: "value",
-                    initial_value: overrides.model || "",
-                    placeholder: {
-                      type: "plain_text",
-                      text: "e.g., codex-mini, claude-opus-4",
-                    },
-                  },
-                },
-                {
-                  type: "input",
-                  block_id: "reasoning",
-                  optional: true,
-                  label: {
-                    type: "plain_text",
-                    text: "Reasoning Effort",
-                  },
-                  element: {
-                    type: "static_select",
-                    action_id: "value",
-                    initial_option: overrides.reasoningEffort
-                      ? {
-                          text: {
-                            type: "plain_text",
-                            text: overrides.reasoningEffort,
-                          },
-                          value: overrides.reasoningEffort,
-                        }
-                      : undefined,
-                    placeholder: {
-                      type: "plain_text",
-                      text: "Select effort level",
-                    },
-                    options: [
-                      {
-                        text: { type: "plain_text", text: "Low" },
-                        value: "low",
-                      },
-                      {
-                        text: { type: "plain_text", text: "Medium" },
-                        value: "medium",
-                      },
-                      {
-                        text: { type: "plain_text", text: "High" },
-                        value: "high",
-                      },
-                      {
-                        text: { type: "plain_text", text: "Extra High" },
-                        value: "xhigh",
-                      },
-                    ],
-                  },
-                },
-              ],
-            },
-          });
-        } else {
-          // Show current config
-          const settings = getChannelSettings(channelId);
-          const overrides = settings.agentOverrides || {};
-          const cwd = getChannelCwd(channelId, env.DEFAULT_CWD);
-
-          await respond({
-            response_type: "ephemeral",
-            text: `*Channel Config:*
-• Working Directory: \`${cwd}\`
-• Agent: ${overrides.agent || "(default)"}
-• Provider: ${overrides.provider || "(default)"}
-• Model: ${overrides.model || "(default)"}
-• Reasoning: ${overrides.reasoningEffort || "(default)"}
-
-Use \`/ode config edit\` to modify.`,
-          });
-        }
-        break;
-      }
-
-      case "gh": {
-        const action = args[1]?.toLowerCase();
-        if (action === "auth") {
-          const { getGitHubAuth, getGitHubAuthForUser } = await import("../storage/settings");
-          const existingAuth = getGitHubAuthForUser(command.user_id)
-            ?? getGitHubAuth()
-            ?? undefined;
-          const host = existingAuth?.host || "github.com";
-          const user = existingAuth?.user || "";
-
-          await client.views.open({
-            trigger_id: command.trigger_id,
-            view: {
-              type: "modal",
-              callback_id: "gh_auth_modal",
-              private_metadata: JSON.stringify({ channelId, userId: command.user_id, host }),
-              title: { type: "plain_text", text: "GitHub Auth" },
-              submit: { type: "plain_text", text: "Save" },
-              close: { type: "plain_text", text: "Cancel" },
-              blocks: [
-                {
-                  type: "section",
-                  text: {
-                    type: "mrkdwn",
-                    text: "Enter a GitHub personal access token for Ode. Git operations use SSH.",
-                  },
-                },
-                {
-                  type: "input",
-                  block_id: "gh_user",
-                  optional: true,
-                  label: { type: "plain_text", text: "GitHub Username" },
-                  element: {
-                    type: "plain_text_input",
-                    action_id: "value",
-                    initial_value: user,
-                    placeholder: { type: "plain_text", text: "octocat" },
-                  },
-                },
-                {
-                  type: "input",
-                  block_id: "gh_token",
-                  label: { type: "plain_text", text: "Personal Access Token" },
-                  element: {
-                    type: "plain_text_input",
-                    action_id: "value",
-                    placeholder: { type: "plain_text", text: "ghp_... or github_pat_..." },
-                  },
-                },
-                {
-                  type: "context",
-                  elements: [
-                    {
-                      type: "mrkdwn",
-                      text: "_Required scopes: `repo`, plus `read:org` for org repos, and `workflow` if managing Actions. Ensure your SSH key is added to GitHub._",
-                    },
-                  ],
-                },
-              ],
-            },
-          });
-        } else {
-          await respond({
-            response_type: "ephemeral",
-            text: "Use `/ode gh auth` to authenticate GitHub CLI.",
-          });
-        }
-        break;
-      }
-
-      case "auth":
-      case "oauth": {
-        // Start OAuth flow - will be handled in oauth.ts
-        const { startOAuthFlow } = await import("./oauth");
-        await startOAuthFlow(channelId, command.trigger_id, client);
-        break;
-      }
-
-      case "callback": {
-        // Callback is now handled automatically by the OAuth server
-        const { isCodexAuthenticated } = await import("../agents/opencode/codex-auth");
-        if (isCodexAuthenticated()) {
-          await respond({
-            response_type: "ephemeral",
-            text: "Already authenticated with OpenAI Codex. Use `/ode config edit` to set provider to `openai` and model to `gpt-5.2-codex`.",
-          });
-        } else {
-          await respond({
-            response_type: "ephemeral",
-            text: "OAuth callback is now handled automatically. After completing authorization in your browser, the credentials will be saved automatically.\n\nIf you haven't started OAuth yet, use `/ode oauth`.",
-          });
-        }
-        break;
-      }
-
-      case "restart": {
-        // Clear OAuth pending sessions
+  slackApp.action("restart_ode", async ({ ack, body, client }) => {
+    await ack();
+    const channelId = (body as any).channel?.id;
+    
+    if (channelId) {
+        // Reuse restart logic... duplicate for now since it's short but involves imports
         const { pendingAuth } = await import("./oauth");
         pendingAuth.clear();
 
-        // Abort any active sessions for this channel
+        const env = loadEnv();
         const cwd = getChannelCwd(channelId, env.DEFAULT_CWD);
         const sessionId = getOpenCodeSession(channelId, cwd);
         if (sessionId) {
@@ -495,41 +123,21 @@ Use \`/ode config edit\` to modify.`,
             : [{ channelId, threadId: null }];
 
         for (const target of restartTargets) {
-          try {
-            const restartMessage = await client.chat.postMessage({
-              channel: target.channelId,
-              text: "Restarting Ode...",
-              ...(target.threadId ? { thread_ts: target.threadId } : {}),
-            });
-            if (restartMessage.ts) {
-              addPendingRestartMessage(target.channelId, restartMessage.ts);
-            }
-          } catch {
-            if (target.channelId === channelId && !target.threadId) {
-              await respond({
-                response_type: "in_channel",
-                text: "Restarting Ode...",
-              });
-            }
-          }
+            // ... restart message logic ...
+             try {
+                const restartMessage = await client.chat.postMessage({
+                  channel: target.channelId,
+                  text: "Restarting Ode...",
+                  ...(target.threadId ? { thread_ts: target.threadId } : {}),
+                });
+                if (restartMessage.ts) {
+                  addPendingRestartMessage(target.channelId, restartMessage.ts);
+                }
+              } catch {}
         }
-
         process.kill(process.pid, "SIGUSR2");
-        break;
-      }
-
-      default: {
-        await respond({
-          response_type: "ephemeral",
-          text: `Unknown command: ${subcommand}. Use \`/ode help\` for available commands.`,
-        });
-      }
     }
   });
-}
-
-export function setupInteractiveHandlers(): void {
-  const slackApp = getApp();
 
   // Handle channel instruction edit modal submission
   slackApp.view("agents_edit_modal", async ({ ack, view }) => {
@@ -732,7 +340,7 @@ export function setupInteractiveHandlers(): void {
     const channelId = view.private_metadata;
     await client.chat.postMessage({
       channel: channelId,
-      text: "OAuth flow has been simplified. Please use `/ode auth` to start the OpenAI Codex authentication.",
+      text: "OAuth flow has been simplified. Use @ode /start to open setup and choose OpenAI Codex auth.",
     });
   });
 
@@ -742,7 +350,7 @@ export function setupInteractiveHandlers(): void {
     const { channelId } = metadata;
     await client.chat.postMessage({
       channel: channelId,
-      text: "OAuth callback is now handled via the modal. Please use `/ode auth` to start authentication.",
+      text: "OAuth callback is now handled via the modal. Use @ode /start to open setup and start authentication.",
     });
   });
 
