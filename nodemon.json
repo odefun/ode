@@ -1,0 +1,8 @@
+{
+  "watch": ["src", ".env"],
+  "ext": "ts,json",
+  "exec": "bun run src/index.ts",
+  "signal": "SIGTERM",
+  "delay": 1000,
+  "ignore": ["data/*", "*.log"]
+}

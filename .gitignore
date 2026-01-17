@@ -1,0 +1,7 @@
+node_modules/
+.env
+data/
+*.log
+.DS_Store
+.ode.pid
+.ode.pgid
