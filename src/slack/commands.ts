@@ -258,6 +258,24 @@ export function setupSlashCommands(): void {
               blocks: [
                 {
                   type: "input",
+                  block_id: "cwd",
+                  optional: true,
+                  label: {
+                    type: "plain_text",
+                    text: "Working Directory",
+                  },
+                  element: {
+                    type: "plain_text_input",
+                    action_id: "value",
+                    initial_value: settings.customCwd || "",
+                    placeholder: {
+                      type: "plain_text",
+                      text: "e.g., ~/Code/ode",
+                    },
+                  },
+                },
+                {
+                  type: "input",
                   block_id: "agent",
                   optional: true,
                   label: {
@@ -568,6 +586,7 @@ export function setupInteractiveHandlers(): void {
     const channelId = view.private_metadata;
     const values = view.state.values;
 
+    const cwd = values.cwd?.value?.value;
     const agent = values.agent?.value?.value;
     const provider = values.provider?.value?.value;
     const model = values.model?.value?.value;
@@ -630,7 +649,10 @@ export function setupInteractiveHandlers(): void {
     if (model) agentOverrides.model = model;
     if (reasoning) agentOverrides.reasoningEffort = reasoning;
 
-    updateChannelSettings(channelId, { agentOverrides });
+    updateChannelSettings(channelId, {
+      agentOverrides,
+      customCwd: cwd?.trim() || undefined,
+    });
 
     // Notify user of successful update
     try {

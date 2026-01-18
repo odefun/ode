@@ -41,6 +41,7 @@ import {
   type OpenCodeMessageContext,
   type OpenCodeOptions,
 } from "../agents";
+import { statusFromEvent, type ProgressEvent } from "../agents/opencode";
 import { log } from "../logger";
 
 export interface MessageContext {
@@ -462,7 +463,7 @@ function buildTodoPrompt(todos: TrackedTodo[]): string {
   return ["Todos:", ...lines].join("\n");
 }
 
-function buildRichStatusMessage(request: ActiveRequest, workingPath: string): string {
+export function buildRichStatusMessage(request: ActiveRequest, workingPath: string): string {
   const lines: string[] = [];
 
   // Simple status with elapsed time
@@ -600,7 +601,7 @@ async function startEventStreamWatcher(
   onTodoUpdate?: (todos: TrackedTodo[]) => Promise<void>
 ): Promise<() => void> {
   if (!supportsEventStream) {
-    return () => {};
+    return () => { };
   }
 
   // Ensure the session instance exists before subscribing
@@ -632,27 +633,27 @@ async function startEventStreamWatcher(
           request.tools.push(toolInfo);
         }
 
-        if (state.status === "running") {
-          const label = formatToolLabel(toolInfo, workingPath);
-          request.currentStatus = label ? `Running: ${label}` : "Running";
+        const status = statusFromEvent({
+          directory: (globalEvent as any).directory,
+          payload: event,
+        } as ProgressEvent, request.sessionId);
+
+        if (status) {
+          request.currentStatus = status;
+          request.currentStep = 'Tool Calling...'
         }
-        onUpdate();
       } else if (part.type === "text" && part.text) {
         request.currentText = part.text;
         request.currentStatus = "Writing response";
-        onUpdate();
       } else if (part.type === "step-start") {
         request.currentStep = part.metadata?.title || "Thinking";
-        request.currentStatus = "Thinking";
-        onUpdate();
       } else if (part.type === "step-finish") {
         request.currentStep = undefined;
-        onUpdate();
       } else if (part.type === "reasoning") {
-        request.currentStatus = "Reasoning";
         request.currentStep = "Thinking deeply...";
-        onUpdate();
       }
+
+      onUpdate();
     } else if (event.type === "todo.updated") {
       const todos = event.properties?.todos || [];
       request.todos = todos.map((t: any) => ({
@@ -754,7 +755,7 @@ async function runOpenCodeRequest(
     });
   }, 2000);
 
-  const stopWatcher = await startEventStreamWatcher(request, cwd, () => {}, onTodosUpdated);
+  const stopWatcher = await startEventStreamWatcher(request, cwd, () => { }, onTodosUpdated);
 
   try {
     request.currentStatus = "Connecting";
@@ -1194,7 +1195,7 @@ export async function handleButtonSelection(
   }, 2000); // 2 seconds to reduce Slack API load
 
   // Event watcher
-  const stopWatcher = await startEventStreamWatcher(request, cwd, () => {}, onTodosUpdated);
+  const stopWatcher = await startEventStreamWatcher(request, cwd, () => { }, onTodosUpdated);
 
   try {
     // Build context - the selection is the user's response

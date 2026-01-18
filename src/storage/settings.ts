@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join, dirname } from "path";
 import { homedir } from "os";
+import { normalizeCwd } from "../config/env";
 
 // Use XDG state directory for persistent data
 const XDG_STATE_HOME = process.env.XDG_STATE_HOME || join(homedir(), ".local", "state");
@@ -62,7 +63,7 @@ export function loadSettings(): Settings {
   if (!existsSync(SETTINGS_FILE)) {
     cachedSettings = {
       channels: {},
-      globalCwd: process.cwd(),
+      globalCwd: normalizeCwd(process.cwd()),
     };
     return cachedSettings;
   }
@@ -70,14 +71,30 @@ export function loadSettings(): Settings {
   try {
     const data = readFileSync(SETTINGS_FILE, "utf-8");
     cachedSettings = JSON.parse(data);
-    return cachedSettings!;
+    const currentSettings = cachedSettings || {
+      channels: {},
+      globalCwd: normalizeCwd(process.cwd()),
+    };
+    if (!currentSettings.globalCwd) {
+      currentSettings.globalCwd = normalizeCwd(process.cwd());
+    } else {
+      currentSettings.globalCwd = normalizeCwd(currentSettings.globalCwd);
+    }
+    cachedSettings = currentSettings;
+    return currentSettings;
   } catch {
     cachedSettings = {
       channels: {},
-      globalCwd: process.cwd(),
+      globalCwd: normalizeCwd(process.cwd()),
     };
     return cachedSettings;
   }
+}
+
+function normalizeChannelSettings(settings: ChannelSettings): ChannelSettings {
+  const customCwd = settings.customCwd ? normalizeCwd(settings.customCwd) : undefined;
+  if (customCwd === settings.customCwd) return settings;
+  return { ...settings, customCwd };
 }
 
 export function saveSettings(settings: Settings): void {
@@ -120,6 +137,11 @@ export function getChannelSettings(channelId: string): ChannelSettings {
     settings.channels[channelId].threadSessions = {};
     saveSettings(settings);
   }
+  const normalized = normalizeChannelSettings(settings.channels[channelId]);
+  if (normalized !== settings.channels[channelId]) {
+    settings.channels[channelId] = normalized;
+    saveSettings(settings);
+  }
   return settings.channels[channelId];
 }
 
@@ -128,10 +150,11 @@ export function updateChannelSettings(
   updates: Partial<ChannelSettings>
 ): void {
   const settings = loadSettings();
-  settings.channels[channelId] = {
+  const merged = {
     ...getChannelSettings(channelId),
     ...updates,
   };
+  settings.channels[channelId] = normalizeChannelSettings(merged);
   saveSettings(settings);
 }
 
@@ -142,7 +165,7 @@ export function getChannelCwd(channelId: string, defaultCwd: string): string {
 
 export function setChannelCwd(channelId: string, cwd: string): void {
   // Clear thread sessions when cwd changes (sessions are project-scoped)
-  updateChannelSettings(channelId, { customCwd: cwd, threadSessions: {} });
+  updateChannelSettings(channelId, { customCwd: normalizeCwd(cwd), threadSessions: {} });
 }
 
 // Per-channel agents.md management

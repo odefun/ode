@@ -133,12 +133,50 @@ function formatClaudeCommand(args: string[]): string {
     .map((arg) => {
       if (arg.length === 0) return "''";
       if (/[^\w@%+=:,./-]/.test(arg)) {
-        const escaped = arg.replace(/'/g, `'"'"'`);
+        const escaped = arg.replace(/'/g, `"'"'"`);
         return `'${escaped}'`;
       }
       return arg;
     })
     .join(" ");
+}
+
+export function buildClaudeCommandArgs(params: {
+  sessionId: string;
+  isNewSession: boolean;
+  systemPrompt: string;
+  workingPath: string;
+  prompt: string;
+}): string[] {
+  const sessionArgs = params.isNewSession
+    ? ["--session-id", params.sessionId]
+    : ["--resume", params.sessionId];
+  return [
+    "--print",
+    "--output-format",
+    "json",
+    "--append-system-prompt",
+    params.systemPrompt,
+    ...sessionArgs,
+    "--add-dir",
+    params.workingPath,
+    params.prompt,
+  ];
+}
+
+export function buildClaudeCommand(
+  baseArgs: string[],
+  permissionMode: string
+): { args: string[]; command: string } {
+  const args = [...baseArgs];
+  const prompt = args.pop();
+  if (prompt !== undefined) {
+    args.push("--permission-mode", permissionMode, "--", prompt);
+  } else {
+    args.push("--permission-mode", permissionMode);
+  }
+  const command = formatClaudeCommand(["claude", ...args]);
+  return { args, command };
 }
 
 async function runClaudeCommand(
@@ -214,45 +252,38 @@ async function runClaudeWithFallback(
   env: SessionEnvironment,
   entry: { controller: AbortController; process?: ChildProcess }
 ): Promise<{ output: string; permissionMode: string; command: string }> {
-  const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
-  const modes = isRoot ? ["dontAsk"] : ["bypassPermissions", "dontAsk"];
-  let lastError: Error | null = null;
+      const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
+      const modes = isRoot ? ["dontAsk"] : ["bypassPermissions", "dontAsk"];
+      let lastError: Error | null = null;
 
-  for (const mode of modes) {
-    try {
-      const args = [...baseArgs];
-      const prompt = args.pop();
-      if (prompt !== undefined) {
-        args.push("--permission-mode", mode, "--", prompt);
-      } else {
-        args.push("--permission-mode", mode);
+      for (const mode of modes) {
+        try {
+          const { args, command } = buildClaudeCommand(baseArgs, mode);
+
+          log.info("Running Claude CLI", {
+            mode,
+            cwd,
+            command,
+          });
+
+          const output = await runClaudeCommand(args, cwd, env, entry);
+          return { output, permissionMode: mode, command };
+        } catch (err) {
+          const error = err as Error;
+          const message = error.message.toLowerCase();
+          if (
+            mode === "bypassPermissions" &&
+            (message.includes("root") || message.includes("sudo") || message.includes("dangerously-skip-permissions"))
+          ) {
+            lastError = error;
+            continue;
+          }
+          throw error;
+        }
       }
 
-      const command = formatClaudeCommand(["claude", ...args]);
+      throw lastError ?? new Error("Claude CLI failed");
 
-      log.info("Running Claude CLI", {
-        mode,
-        cwd,
-        command,
-      });
-
-      const output = await runClaudeCommand(args, cwd, env, entry);
-      return { output, permissionMode: mode, command };
-    } catch (err) {
-      const error = err as Error;
-      const message = error.message.toLowerCase();
-      if (
-        mode === "bypassPermissions" &&
-        (message.includes("root") || message.includes("sudo") || message.includes("dangerously-skip-permissions"))
-      ) {
-        lastError = error;
-        continue;
-      }
-      throw error;
-    }
-  }
-
-  throw lastError ?? new Error("Claude CLI failed");
 }
 
 export async function sendMessage(
@@ -285,18 +316,13 @@ export async function sendMessage(
       const systemPrompt = buildSlackSystemPrompt(context?.slack);
 
       const isNewSession = newSessions.has(sessionId);
-      const sessionArgs = isNewSession ? ["--session-id", sessionId] : ["--resume", sessionId];
-      const args = [
-        "--print",
-        "--output-format",
-        "json",
-        "--append-system-prompt",
+      const args = buildClaudeCommandArgs({
+        sessionId,
+        isNewSession,
         systemPrompt,
-        ...sessionArgs,
-        "--add-dir",
         workingPath,
         prompt,
-      ];
+      });
 
       const envOverrides = sessionEnvironments.get(sessionId) ?? {};
       const { output, permissionMode, command } = await runClaudeWithFallback(

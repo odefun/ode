@@ -1,4 +1,15 @@
+import { homedir } from "os";
+import { resolve, join } from "path";
 import { z } from "zod";
+
+export function normalizeCwd(input: string): string {
+  if (!input) return process.cwd();
+  if (input === "~") return homedir();
+  if (input.startsWith("~/")) {
+    return resolve(join(homedir(), input.slice(2)));
+  }
+  return resolve(input);
+}
 
 const envSchema = z.object({
   // Slack configuration
@@ -11,13 +22,16 @@ const envSchema = z.object({
   CODING_AGENT: z.enum(["opencode", "claude"]).default("opencode"),
 
   // Working directory
-  DEFAULT_CWD: z.string().default(process.cwd()),
+  DEFAULT_CWD: z.string().default(process.cwd()).transform(normalizeCwd),
 
   // OAuth callback handling
   OAUTH_CALLBACK_PORT: z.coerce.number().default(3000),
 
   // Logging
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
+
+  // OpenCode diagnostics
+  OPENCODE_EVENT_DUMP: z.coerce.boolean().default(false),
 });
 
 export type Env = z.infer<typeof envSchema>;

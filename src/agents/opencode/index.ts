@@ -21,6 +21,8 @@ export {
   watchSessionProgress,
   abortSession,
   cancelActiveRequest,
+  statusFromEvent,
+  type ProgressEvent,
 } from "./client";
 
 export type {
