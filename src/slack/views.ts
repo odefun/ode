@@ -366,6 +366,7 @@ export async function sendMainMenu(
   const settings = getChannelSettings(channelId);
   const provider = settings.agentOverrides?.provider || "default";
   const model = settings.agentOverrides?.model || "default";
+  const serverUrl = settings.opencodeServerUrl || "default";
 
   // Get blocks
   const menuBlocks = getMainMenuBlocks();
@@ -375,7 +376,7 @@ export async function sendMainMenu(
     type: "section",
     text: {
       type: "mrkdwn",
-      text: `*Ode Control Panel*\nCWD: \`${cwd}\`\nProvider: \`${provider}\` / Model: \`${model}\``
+      text: `*Ode Control Panel*\nCWD: \`${cwd}\`\nProvider: \`${provider}\` / Model: \`${model}\`\nOpenCode Server: \`${serverUrl}\``
     }
   };
 

@@ -15,6 +15,7 @@ const GH_USERS_DIR = join(ODE_STATE_DIR, "gh-users");
 
 export interface ChannelSettings {
   customCwd?: string;
+  opencodeServerUrl?: string;
   threadSessions: Record<string, string>; // threadId -> sessionId
   agentOverrides?: {
     agent?: string;

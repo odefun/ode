@@ -111,7 +111,8 @@ Mention the bot with \`/start\` to open setup.
         const cwd = getChannelCwd(channelId, env.DEFAULT_CWD);
         const sessionId = getOpenCodeSession(channelId, cwd);
         if (sessionId) {
-          await abortSession(sessionId);
+          const channelSettings = getChannelSettings(channelId);
+          await abortSession(sessionId, cwd, channelSettings.opencodeServerUrl);
         }
 
         const pendingSessions = getSessionsWithPendingRequests();
@@ -186,12 +187,14 @@ Mention the bot with \`/start\` to open setup.
       | "high"
       | "xhigh"
       | undefined;
+    const serverUrl = values.server_url?.value?.value?.trim();
 
     // Validate provider/model combination if both are specified
     if (provider && model) {
       try {
-        const serverUrl = await getAnyServerUrl();
-        const response = await fetch(`${serverUrl}/provider`);
+        const channelSettings = getChannelSettings(channelId);
+        const validationUrl = serverUrl || channelSettings.opencodeServerUrl || await getAnyServerUrl();
+        const response = await fetch(`${validationUrl}/provider`);
         if (response.ok) {
           const data = await response.json() as { all?: Array<{ id: string; models?: Record<string, { id: string }> }> };
           const providerData = data.all?.find((p) => p.id === provider);
@@ -239,13 +242,15 @@ Mention the bot with \`/start\` to open setup.
     if (model) agentOverrides.model = model;
     if (reasoning) agentOverrides.reasoningEffort = reasoning;
 
-    updateChannelSettings(channelId, { agentOverrides });
+    const opencodeServerUrl = serverUrl || undefined;
+    updateChannelSettings(channelId, { agentOverrides, opencodeServerUrl });
 
     // Notify user of successful update
     try {
+      const serverStatus = opencodeServerUrl ? `, server=${opencodeServerUrl}` : "";
       await client.chat.postMessage({
         channel: channelId,
-        text: `Config updated: provider=${provider || "(default)"}, model=${model || "(default)"}`,
+        text: `Config updated: provider=${provider || "(default)"}, model=${model || "(default)"}${serverStatus}`,
       });
     } catch {
       // Ignore notification errors

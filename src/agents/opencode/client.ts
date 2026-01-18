@@ -1,6 +1,7 @@
 import {
   createSessionInstance,
   getSessionClient,
+  getClientForServerUrl,
   ensureValidSession,
   getSessionEnvironment,
   getSessionServerUrl,
@@ -77,8 +78,27 @@ async function withSessionLock<T>(
 
 export async function createSession(
   workingPath: string,
-  env?: SessionEnvironment
+  env?: SessionEnvironment,
+  serverUrl?: string
 ): Promise<string> {
+  if (serverUrl) {
+    const client = getClientForServerUrl(serverUrl);
+    const result = await client.session.create({
+      directory: workingPath,
+    });
+
+    if (!result.data?.id) {
+      log.error("Session creation failed", {
+        hasData: !!result.data,
+        data: result.data,
+        error: (result as any).error,
+      });
+      throw new Error("Failed to create session: no ID returned");
+    }
+
+    return result.data.id;
+  }
+
   // Create a new OpenCode instance for this session
   const { client, register } = await createSessionInstance(env);
 
@@ -117,13 +137,18 @@ export async function getOrCreateSession(
   workingPath: string,
   env: SessionEnvironment = {}
 ): Promise<OpenCodeSessionInfo> {
+  const channelSettings = getChannelSettings(channelId);
+  const serverUrl = channelSettings.opencodeServerUrl;
   const existingSession = getOpenCodeSession(channelId, threadId);
   if (existingSession) {
+    if (serverUrl) {
+      return { sessionId: existingSession, created: false };
+    }
     const existingEnv = normalizeSessionEnvironment(getSessionEnvironment(existingSession));
     const desiredEnv = normalizeSessionEnvironment(env);
     if (existingEnv !== desiredEnv) {
       log.info("Session environment changed; creating new session", { channelId, threadId, workingPath });
-      const sessionId = await createSession(workingPath, env);
+      const sessionId = await createSession(workingPath, env, serverUrl);
       setOpenCodeSession(channelId, threadId, sessionId);
       return { sessionId, created: true };
     }
@@ -131,7 +156,7 @@ export async function getOrCreateSession(
   }
 
   log.info("Creating new session for thread", { channelId, threadId, workingPath });
-  const sessionId = await createSession(workingPath, env);
+  const sessionId = await createSession(workingPath, env, serverUrl);
   setOpenCodeSession(channelId, threadId, sessionId);
   return { sessionId, created: true };
 }
@@ -145,8 +170,13 @@ export async function sendMessage(
   options?: OpenCodeOptions,
   context?: OpenCodeMessageContext
 ): Promise<OpenCodeMessage[]> {
+  const channelSettings = getChannelSettings(channelId);
+  const serverUrlOverride = channelSettings.opencodeServerUrl;
+
   // Ensure we have a valid session in the OpenCode instance
-  const validSessionId = await ensureValidSession(sessionId, workingPath);
+  const validSessionId = serverUrlOverride
+    ? sessionId
+    : await ensureValidSession(sessionId, workingPath);
 
   // If sessionId changed, update storage
   if (validSessionId !== sessionId && context?.slack?.threadId) {
@@ -172,10 +202,11 @@ export async function sendMessage(
 
   try {
     return await withSessionLock(sessionKey, async () => {
-      const client = await getSessionClient(activeSessionId);
+      const client = serverUrlOverride
+        ? getClientForServerUrl(serverUrlOverride)
+        : await getSessionClient(activeSessionId);
 
       // Get channel overrides
-      const channelSettings = getChannelSettings(channelId);
       const overrides = channelSettings.agentOverrides;
 
       // Determine agent and model
@@ -183,7 +214,7 @@ export async function sendMessage(
       const model =
         overrides?.provider && overrides?.model
           ? { providerID: overrides.provider, modelID: overrides.model }
-          : { providerID: 'openai', modelID: 'gpt-5.2-codex' };
+          : { providerID: "openai", modelID: "gpt-5.2-codex" };
 
       // Build message parts
       const parts = buildPromptParts(channelId, message, { ...options, agent }, context);
@@ -191,7 +222,7 @@ export async function sendMessage(
       // Build system prompt with Slack context
       const system = buildSlackSystemPrompt(context?.slack);
       const payload = { directory: workingPath, parts, agent, model, system };
-      const serverUrl = getSessionServerUrl(activeSessionId);
+      const serverUrl = serverUrlOverride || getSessionServerUrl(activeSessionId);
       const command = serverUrl
         ? formatOpenCodeCommand(serverUrl, activeSessionId, payload)
         : null;
@@ -389,13 +420,16 @@ function statusFromEvent(event: ProgressEvent, sessionId: string): string | null
 export function watchSessionProgress(
   sessionId: string,
   workingPath: string,
-  handler: OpenCodeProgressHandler
+  handler: OpenCodeProgressHandler,
+  serverUrlOverride?: string
 ): () => void {
   let running = true;
 
   void (async () => {
     try {
-      const client = await getSessionClient(sessionId);
+      const client = serverUrlOverride
+        ? getClientForServerUrl(serverUrlOverride)
+        : await getSessionClient(sessionId);
       const events = await client.global.event();
 
       for await (const globalEvent of events.stream) {
@@ -423,9 +457,15 @@ export function watchSessionProgress(
   };
 }
 
-export async function abortSession(sessionId: string, directory?: string): Promise<void> {
+export async function abortSession(
+  sessionId: string,
+  directory?: string,
+  serverUrlOverride?: string
+): Promise<void> {
   try {
-    const client = await getSessionClient(sessionId);
+    const client = serverUrlOverride
+      ? getClientForServerUrl(serverUrlOverride)
+      : await getSessionClient(sessionId);
     await client.session.abort({
       sessionID: sessionId,
       directory,
@@ -445,7 +485,8 @@ export async function cancelActiveRequest(
   if (controller) {
     controller.abort();
     activeRequests.delete(sessionKey);
-    await abortSession(sessionId, directory);
+    const serverUrlOverride = getChannelSettings(channelId).opencodeServerUrl;
+    await abortSession(sessionId, directory, serverUrlOverride);
     return true;
   }
   return false;

@@ -603,6 +603,105 @@ async function startEventStreamWatcher(
     return () => {};
   }
 
+  const channelSettings = getChannelSettings(request.channelId);
+  const serverUrlOverride = channelSettings.opencodeServerUrl;
+  if (serverUrlOverride) {
+    const { getClientForServerUrl } = await import("../agents/opencode/server");
+    let running = true;
+
+    void (async () => {
+      try {
+        const client = getClientForServerUrl(serverUrlOverride);
+        const events = await client.global.event();
+
+        for await (const globalEvent of events.stream) {
+          if (!running) break;
+
+          const event = (globalEvent as any).payload ?? globalEvent;
+          const sessionId = request.sessionId;
+
+          if (event.type === "message.part.updated") {
+            const part = event.properties?.part;
+            if (!part || (part.sessionID && part.sessionID !== sessionId)) return;
+
+            if (part.type === "tool") {
+              const state = part.state || {};
+              const existingIdx = request.tools.findIndex(t => t.id === part.id);
+              const toolInfo: TrackedTool = {
+                id: part.id,
+                name: part.tool || "Unknown tool",
+                status: state.status || "pending",
+                title: state.title,
+                output: state.output,
+                error: state.error,
+              };
+
+              if (existingIdx >= 0) {
+                request.tools[existingIdx] = toolInfo;
+              } else {
+                request.tools.push(toolInfo);
+              }
+
+              if (state.status === "running") {
+                const label = formatToolLabel(toolInfo, workingPath);
+                request.currentStatus = label ? `Running: ${label}` : "Running";
+              }
+              onUpdate();
+            } else if (part.type === "text" && part.text) {
+              request.currentText = part.text;
+              request.currentStatus = "Writing response";
+              onUpdate();
+            } else if (part.type === "step-start") {
+              request.currentStep = part.metadata?.title || "Thinking";
+              request.currentStatus = "Thinking";
+              onUpdate();
+            } else if (part.type === "step-finish") {
+              request.currentStep = undefined;
+              onUpdate();
+            } else if (part.type === "reasoning") {
+              request.currentStatus = "Reasoning";
+              request.currentStep = "Thinking deeply...";
+              onUpdate();
+            }
+          } else if (event.type === "todo.updated") {
+            const eventSessionId = event.properties?.sessionID;
+            if (eventSessionId && eventSessionId !== sessionId) return;
+            const todos = event.properties?.todos || [];
+            request.todos = todos.map((t: any) => ({
+              content: t.content || t.text || "",
+              status: t.status || "pending",
+            }));
+            void onTodoUpdate?.(request.todos);
+            onUpdate();
+          } else if (event.type === "session.status") {
+            const eventSessionId = event.properties?.sessionID;
+            if (eventSessionId && eventSessionId !== sessionId) return;
+            const status = event.properties?.status;
+            if (status?.type === "busy") {
+              request.currentStatus = "Working";
+            } else if (status?.type === "retry") {
+              const seconds = status.next
+                ? Math.max(0, Math.ceil((status.next - Date.now()) / 1000))
+                : undefined;
+              request.currentStatus = seconds !== undefined
+                ? `Retrying in ${seconds}s`
+                : "Retrying...";
+            }
+            onUpdate();
+          }
+        }
+      } catch (err) {
+        if (running) {
+          log.warn("OpenCode progress stream error", { error: String(err) });
+        }
+      }
+    })();
+
+    return () => {
+      running = false;
+    };
+  }
+
   // Ensure the session instance exists before subscribing
   await ensureSession(request.sessionId);
 
@@ -1111,7 +1210,8 @@ export async function handleStopCommand(
 
   try {
     const cwd = session.workingDirectory;
-    await abortSession(request.sessionId, cwd);
+    const channelSettings = getChannelSettings(channelId);
+    await abortSession(request.sessionId, cwd, channelSettings.opencodeServerUrl);
   } catch {
     // Ignore abort errors
   }

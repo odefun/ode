@@ -1,5 +1,6 @@
 import {
   createOpencode,
+  createOpencodeClient,
   type OpencodeClient,
   type EventPermissionAsked,
 } from "@opencode-ai/sdk/v2";
@@ -246,6 +247,10 @@ export async function createSessionInstance(envOverrides?: SessionEnvironment): 
 export async function getSessionClient(sessionId: string): Promise<OpencodeClient> {
   const session = await getOrCreateSessionInstance(sessionId);
   return session.client;
+}
+
+export function getClientForServerUrl(serverUrl: string): OpencodeClient {
+  return createOpencodeClient({ baseUrl: serverUrl });
 }
 
 export function getSessionEnvironment(sessionId: string): SessionEnvironment | null {

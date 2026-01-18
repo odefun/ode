@@ -228,6 +228,24 @@ export async function openConfigModal(
             ],
           },
         },
+        {
+          type: "input",
+          block_id: "server_url",
+          optional: true,
+          label: {
+            type: "plain_text",
+            text: "OpenCode Server URL",
+          },
+          element: {
+            type: "plain_text_input",
+            action_id: "value",
+            initial_value: settings.opencodeServerUrl || "",
+            placeholder: {
+              type: "plain_text",
+              text: "https://opencode.yourdomain.com",
+            },
+          },
+        },
       ],
     },
   });
