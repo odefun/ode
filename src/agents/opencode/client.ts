@@ -37,7 +37,7 @@ function formatShellCommand(args: string[]): string {
     .join(" ");
 }
 
-function formatOpenCodeCommand(
+export function buildOpenCodeCommand(
   url: string,
   sessionId: string,
   payload: Record<string, unknown>
@@ -193,7 +193,7 @@ export async function sendMessage(
       const payload = { directory: workingPath, parts, agent, model, system };
       const serverUrl = getSessionServerUrl(activeSessionId);
       const command = serverUrl
-        ? formatOpenCodeCommand(serverUrl, activeSessionId, payload)
+        ? buildOpenCodeCommand(serverUrl, activeSessionId, payload)
         : null;
 
       log.info("Sending message via SDK", { sessionId: activeSessionId, agent, model, command });
@@ -238,7 +238,7 @@ export async function sendMessage(
   }
 }
 
-interface ProgressEvent {
+export interface ProgressEvent {
   directory?: string;
   payload?: {
     type?: string;
@@ -247,11 +247,10 @@ interface ProgressEvent {
 }
 
 function formatProgressStatus(status: string): string {
-  if (status.length <= 80) return status;
-  return `${status.slice(0, 77)}...`;
+  return status;
 }
 
-function statusFromSessionStatus(status: unknown): string {
+export function statusFromSessionStatus(status: unknown): string {
   if (!status || typeof status !== "object") return "Working";
   const data = status as {
     type?: string;
@@ -277,7 +276,48 @@ function statusFromSessionStatus(status: unknown): string {
   }
 }
 
-function statusFromPart(part: Record<string, unknown>): string | null {
+function formatToolDetail(part: Record<string, unknown>): string | null {
+  const tool = typeof part.tool === "string" ? part.tool : undefined;
+  const state = part.state as { input?: Record<string, unknown> } | undefined;
+  const input = state?.input ?? {};
+
+  const path = typeof input.path === "string" ? input.path : undefined;
+  const pattern = typeof input.pattern === "string" ? input.pattern : undefined;
+  const filePath = typeof input.filePath === "string" ? input.filePath : undefined;
+  const command = typeof input.command === "string" ? input.command : undefined;
+  const url = typeof (input as { url?: unknown }).url === "string"
+    ? (input as { url?: string }).url
+    : undefined;
+
+  switch (tool) {
+    case "glob":
+      return pattern
+        ? `Glob "${pattern}"${path ? ` in ${path}` : ""}`
+        : "Glob";
+    case "grep":
+      return pattern
+        ? `Grep "${pattern}"${path ? ` in ${path}` : ""}`
+        : "Grep";
+    case "read":
+      return filePath ? `Read ${filePath}` : "Read";
+    case "list":
+      return path ? `List ${path}` : "List";
+    case "webfetch":
+      return url ? `WebFetch ${url}` : "WebFetch";
+    case "bash":
+    case "shell":
+    case "command":
+      return command ? `$ ${command}` : "Shell";
+    case "write":
+      return filePath ? `Write ${filePath}` : "Write";
+    case "edit":
+      return filePath ? `Edit ${filePath}` : "Edit";
+    default:
+      return null;
+  }
+}
+
+export function statusFromPart(part: Record<string, unknown>): string | null {
   const type = part.type;
   if (typeof type !== "string") return null;
 
@@ -313,27 +353,33 @@ function statusFromPart(part: Record<string, unknown>): string | null {
     }
     case "tool": {
       const state = part.state as
-        | { status?: string; title?: string }
+        | { status?: string; title?: string; input?: { command?: string; description?: string } }
         | undefined;
-      const tool =
+      const toolTitle =
         typeof state?.title === "string"
           ? state.title
           : typeof part.tool === "string"
             ? part.tool
             : undefined;
-      const toolLabel = tool ? ` ${tool}` : "";
-      switch (state?.status) {
-        case "running":
-          return `Running tool${toolLabel}`;
-        case "pending":
-          return `Preparing tool${toolLabel}`;
-        case "completed":
-          return `Finished tool${toolLabel}`;
-        case "error":
-          return `Tool failed${toolLabel}`;
-        default:
-          return tool ? `Running tool ${tool}` : "Running tool";
+      const detail = formatToolDetail(part);
+      const toolLabel = toolTitle ? ` ${toolTitle}` : "";
+      const status = state?.status;
+      const prefix =
+        status === "running"
+          ? "Running tool"
+          : status === "pending"
+            ? "Preparing tool"
+            : status === "completed"
+              ? "Finished tool"
+              : status === "error"
+                ? "Tool failed"
+                : toolTitle
+                  ? "Running tool"
+                  : "Running tool";
+      if (detail) {
+        return `${prefix}: ${detail}`;
       }
+      return `${prefix}${toolLabel}`;
     }
     case "file": {
       const filename =
@@ -349,7 +395,7 @@ function statusFromPart(part: Record<string, unknown>): string | null {
   }
 }
 
-function statusFromEvent(event: ProgressEvent, sessionId: string): string | null {
+export function statusFromEvent(event: ProgressEvent, sessionId: string): string | null {
   const payload = event.payload;
   if (!payload?.type) return null;
 
@@ -400,6 +446,10 @@ export function watchSessionProgress(
 
       for await (const globalEvent of events.stream) {
         if (!running) break;
+
+        if (process.env.OPENCODE_EVENT_DUMP === "true") {
+          log.info("OpenCode event", { sessionId, event: globalEvent });
+        }
 
         const event: ProgressEvent = {
           directory: (globalEvent as any).directory,
