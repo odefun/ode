@@ -6,3 +6,4 @@ data/
 .ode.pid
 .ode.pgid
 supabase/
+.env.dev
