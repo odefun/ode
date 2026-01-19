@@ -72,6 +72,7 @@ type WorkspaceAuth = {
 const teamAuthMap = new Map<string, WorkspaceAuth>();
 const enterpriseAuthMap = new Map<string, WorkspaceAuth>();
 const channelWorkspaceMap = new Map<string, string>();
+const channelBotTokenMap = new Map<string, string>();
 
 type SlackClient = AllMiddlewareArgs["client"];
 
@@ -137,10 +138,16 @@ async function processGlobalUpdateQueue(): Promise<void> {
         ? formattedText.slice(0, 3900) + "\n\n_(truncated)_"
         : formattedText;
 
+      const botToken = resolveChannelBotToken(item.channelId);
+      if (!botToken) {
+        log.warn("No Slack bot token available for message update", { channelId: item.channelId });
+      }
       await slackApp.client.chat.update({
         channel: item.channelId,
+
         ts: item.messageTs,
         text: truncatedText,
+        token: botToken,
       });
     } catch (err) {
       log.debug("Failed to update message", { error: String(err) });
@@ -201,6 +208,16 @@ function resolveWorkspaceAuth(
   }
 
   return undefined;
+}
+
+function resolveChannelBotToken(channelId: string): string | undefined {
+  return channelBotTokenMap.get(channelId);
+}
+
+function registerChannelBotToken(channelId: string, botToken: string | undefined): void {
+  if (!botToken) return;
+  if (channelBotTokenMap.has(channelId)) return;
+  channelBotTokenMap.set(channelId, botToken);
 }
 
 function truncateToken(token: string): string {
@@ -279,8 +296,14 @@ export async function sendMessage(
   const formattedText = asMarkdown ? markdownToSlack(text) : text;
   const chunks = splitForSlack(formattedText);
   const workspace = channelWorkspaceMap.get(channelId) || "unknown";
+  const botToken = resolveChannelBotToken(channelId);
+
+  if (!botToken) {
+    log.warn("No Slack bot token available for channel", { channelId });
+  }
 
   log.info("[SEND] Slack message", {
+
     workspace,
     channel: channelId,
     thread: threadId,
@@ -294,6 +317,7 @@ export async function sendMessage(
       channel: channelId,
       thread_ts: threadId,
       text: chunk,
+      token: botToken,
     });
     lastTs = result.ts;
   }
@@ -306,9 +330,14 @@ export async function deleteMessage(
 ): Promise<void> {
   try {
     const slackApp = getApp();
+    const botToken = resolveChannelBotToken(channelId);
+    if (!botToken) {
+      log.warn("No Slack bot token available for message delete", { channelId });
+    }
     await slackApp.client.chat.delete({
       channel: channelId,
       ts: messageTs,
+      token: botToken,
     });
   } catch {
     // Ignore delete failures
@@ -1414,6 +1443,7 @@ export function setupMessageHandlers(): void {
     const threadId = message.thread_ts || message.ts;
 
     if (!isAuthorizedChannel(channelId)) return;
+    registerChannelBotToken(channelId, client.token);
 
     // Get bot user ID for this workspace
     let currentBotUserId: string | null = botUserId;
@@ -1426,6 +1456,7 @@ export function setupMessageHandlers(): void {
         if (auth?.workspaceName && !channelWorkspaceMap.has(channelId)) {
           channelWorkspaceMap.set(channelId, auth.workspaceName);
         }
+        registerChannelBotToken(channelId, auth?.botToken);
       }
     }
 
@@ -1508,6 +1539,7 @@ export function setupMessageHandlers(): void {
 
     if (!isAuthorizedChannel(channelId)) return;
     if (!userId) return;
+    registerChannelBotToken(channelId, client.token);
 
     let currentBotUserId: string | null = botUserId;
     if (!currentBotUserId) {
@@ -1519,6 +1551,7 @@ export function setupMessageHandlers(): void {
         if (auth?.workspaceName && !channelWorkspaceMap.has(channelId)) {
           channelWorkspaceMap.set(channelId, auth.workspaceName);
         }
+        registerChannelBotToken(channelId, auth?.botToken);
       }
     }
 
