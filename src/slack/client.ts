@@ -44,6 +44,7 @@ import {
 import { statusFromEvent, type ProgressEvent } from "../agents/opencode";
 import { log } from "../logger";
 import { getProfileBySlackUserId } from "../db";
+import type { WorkspaceApp } from "./multi";
 
 export interface MessageContext {
   channelId: string;
@@ -51,11 +52,18 @@ export interface MessageContext {
   userId: string;
   messageId: string;
   opencodeServerUrl?: string;
+  workspaceName?: string;
 }
 
 
 let app: App | null = null;
 let botUserId: string | null = null;
+
+// Per-workspace bot user IDs
+const workspaceBotUserIds = new Map<string, string>();
+
+// Track which workspace owns a channel for logging
+const channelWorkspaceMap = new Map<string, string>();
 
 type SlackClient = AllMiddlewareArgs["client"];
 
@@ -169,8 +177,10 @@ export async function sendMessage(
   const slackApp = getApp();
   const formattedText = asMarkdown ? markdownToSlack(text) : text;
   const chunks = splitForSlack(formattedText);
+  const workspace = channelWorkspaceMap.get(channelId) || "unknown";
 
   log.info("[SEND] Slack message", {
+    workspace,
     channel: channelId,
     thread: threadId,
     text: text.slice(0, 100) + (text.length > 100 ? "..." : ""),
@@ -1287,8 +1297,9 @@ export async function handleButtonSelection(
   }
 }
 
-export function setupMessageHandlers(): void {
-  const slackApp = getApp();
+export function setupMessageHandlers(workspaceApp?: WorkspaceApp): void {
+  const slackApp = workspaceApp?.app ?? getApp();
+  const workspaceName = workspaceApp?.workspaceName ?? "default";
 
   // Handle messages
   slackApp.message(async ({ message, say, client }) => {
@@ -1304,13 +1315,28 @@ export function setupMessageHandlers(): void {
 
     if (!isAuthorizedChannel(channelId)) return;
 
-    // Get bot user ID
-    if (!botUserId) {
-      const authResult = await client.auth.test();
-      botUserId = authResult.user_id as string;
+    // Track workspace for this channel
+    if (workspaceApp && !channelWorkspaceMap.has(channelId)) {
+      channelWorkspaceMap.set(channelId, workspaceName);
     }
 
-    if (userId === botUserId) return;
+    // Get bot user ID for this workspace
+    let currentBotUserId: string | undefined;
+    if (workspaceApp) {
+      if (!workspaceBotUserIds.has(workspaceApp.botToken)) {
+        const authResult = await client.auth.test();
+        workspaceBotUserIds.set(workspaceApp.botToken, authResult.user_id as string);
+      }
+      currentBotUserId = workspaceBotUserIds.get(workspaceApp.botToken);
+    } else {
+      if (!botUserId) {
+        const authResult = await client.auth.test();
+        botUserId = authResult.user_id as string;
+      }
+      currentBotUserId = botUserId ?? undefined;
+    }
+
+    if (userId === currentBotUserId) return;
 
     // Check for stop command
     if (/\bstop\b/i.test(text)) {
@@ -1325,29 +1351,33 @@ export function setupMessageHandlers(): void {
     }
 
     // Check if bot is mentioned or thread is active
-    const isMention = text.includes(`<@${botUserId}>`);
+    const isMention = currentBotUserId ? text.includes(`<@${currentBotUserId}>`) : false;
     const threadActive = isThreadActive(channelId, threadId);
 
     if (!isMention && !threadActive) return;
 
     // If message mentions someone else (but not us), ignore it - it's not for us
-    const mentionsOthers = /<@U[A-Z0-9]+>/g.test(text) && !isMention;
+    const mentionsOthers = /\<@U[A-Z0-9]+\>/g.test(text) && !isMention;
     if (mentionsOthers) return;
 
     markThreadActive(channelId, threadId);
 
-    const cleanText = text.replace(new RegExp(`<@${botUserId}>`, "g"), "").trim();
+    const cleanText = currentBotUserId
+      ? text.replace(new RegExp(`<@${currentBotUserId}>`, "g"), "").trim()
+      : text.trim();
 
     log.info("[RECV] Slack message", {
+      workspace: workspaceName,
       channel: channelId,
       thread: threadId,
       user: userId,
       text: cleanText.slice(0, 100) + (cleanText.length > 100 ? "..." : ""),
     });
 
-    log.info("[RECV] Slack user id", { userId });
+    log.info("[RECV] Slack user id", { workspace: workspaceName, userId });
     const profile = await getProfileBySlackUserId(userId);
     log.info("[RECV] Supabase profile lookup", {
+      workspace: workspaceName,
       userId,
       found: Boolean(profile),
       profile,
@@ -1368,6 +1398,7 @@ export function setupMessageHandlers(): void {
       userId,
       messageId: message.ts,
       opencodeServerUrl: profile?.opencode_server_url ?? undefined,
+      workspaceName,
     };
 
     await handleUserMessage(context, cleanText, client);
@@ -1383,25 +1414,45 @@ export function setupMessageHandlers(): void {
     if (!isAuthorizedChannel(channelId)) return;
     if (!userId) return;
 
-    if (!botUserId) {
-      const authResult = await client.auth.test();
-      botUserId = authResult.user_id as string;
+    // Track workspace for this channel
+    if (workspaceApp && !channelWorkspaceMap.has(channelId)) {
+      channelWorkspaceMap.set(channelId, workspaceName);
+    }
+
+    // Get bot user ID for this workspace
+    let currentBotUserId: string | undefined;
+    if (workspaceApp) {
+      if (!workspaceBotUserIds.has(workspaceApp.botToken)) {
+        const authResult = await client.auth.test();
+        workspaceBotUserIds.set(workspaceApp.botToken, authResult.user_id as string);
+      }
+      currentBotUserId = workspaceBotUserIds.get(workspaceApp.botToken);
+    } else {
+      if (!botUserId) {
+        const authResult = await client.auth.test();
+        botUserId = authResult.user_id as string;
+      }
+      currentBotUserId = botUserId ?? undefined;
     }
 
     markThreadActive(channelId, threadId);
 
-    const cleanText = text.replace(new RegExp(`<@${botUserId}>`, "g"), "").trim();
+    const cleanText = currentBotUserId
+      ? text.replace(new RegExp(`<@${currentBotUserId}>`, "g"), "").trim()
+      : text.trim();
 
     log.info("[RECV] Slack app_mention", {
+      workspace: workspaceName,
       channel: channelId,
       thread: threadId,
       user: userId,
       text: cleanText.slice(0, 100) + (cleanText.length > 100 ? "..." : ""),
     });
 
-    log.info("[RECV] Slack user id", { userId });
+    log.info("[RECV] Slack user id", { workspace: workspaceName, userId });
     const profile = await getProfileBySlackUserId(userId);
     log.info("[RECV] Supabase profile lookup", {
+      workspace: workspaceName,
       userId,
       found: Boolean(profile),
       opencodeServerUrl: profile?.opencode_server_url ?? null,
@@ -1421,8 +1472,11 @@ export function setupMessageHandlers(): void {
       userId,
       messageId: event.ts,
       opencodeServerUrl: profile?.opencode_server_url ?? undefined,
+      workspaceName,
     };
 
     await handleUserMessage(context, cleanText, client);
   });
+
+  log.info("Message handlers registered", { workspace: workspaceName });
 }

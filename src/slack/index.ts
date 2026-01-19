@@ -13,3 +13,14 @@ export { setupSlashCommands, setupInteractiveHandlers } from "./commands";
 export { startOAuthFlow, stopOAuthServer, processOAuthCallback } from "./oauth";
 
 export { markdownToSlack, truncateForSlack, splitForSlack } from "./formatter";
+
+export {
+  initializeWorkspaceApps,
+  getWorkspaceApps,
+  getWorkspaceApp,
+  startAllWorkspaces,
+  stopAllWorkspaces,
+  setWorkspaceBotUserId,
+  getWorkspaceName,
+  type WorkspaceApp,
+} from "./multi";

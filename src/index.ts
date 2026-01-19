@@ -1,10 +1,12 @@
 import {
-  createSlackApp,
   setupMessageHandlers,
   setupSlashCommands,
   setupInteractiveHandlers,
   stopOAuthServer,
   recoverPendingRequests,
+  initializeWorkspaceApps,
+  startAllWorkspaces,
+  stopAllWorkspaces,
 } from "./slack";
 import { spawn } from "child_process";
 import { stopServer } from "./agents";
@@ -18,19 +20,24 @@ async function main(): Promise<void> {
   const env = loadEnv();
   log.info("Config loaded", { logLevel: env.LOG_LEVEL, defaultCwd: env.DEFAULT_CWD });
 
-  // Create Slack app
-  const app = createSlackApp();
-  log.info("Slack app created");
+  // Initialize all workspace apps (from env + database)
+  const workspaceApps = await initializeWorkspaceApps();
+  log.info("Initialized workspace apps", { count: workspaceApps.length });
 
-  // Setup handlers
-  setupMessageHandlers();
-  log.info("Message handlers registered");
+  // Setup handlers for each workspace
+  for (const workspaceApp of workspaceApps) {
+    setupMessageHandlers(workspaceApp);
+    log.info("Message handlers registered", { workspace: workspaceApp.workspaceName });
+  }
 
-  setupSlashCommands();
-  log.info("Slash commands registered");
-
-  setupInteractiveHandlers();
-  log.info("Interactive handlers registered");
+  // Setup slash commands and interactive handlers for all workspaces
+  for (const workspaceApp of workspaceApps) {
+    setupSlashCommands(workspaceApp.app);
+    setupInteractiveHandlers(workspaceApp.app);
+    log.info("Slash commands and interactive handlers registered", {
+      workspace: workspaceApp.workspaceName,
+    });
+  }
 
   // Handle shutdown gracefully
   const shutdown = async (signal: string) => {
@@ -39,7 +46,7 @@ async function main(): Promise<void> {
     try {
       stopOAuthServer();
       await stopServer();
-      await app.stop();
+      await stopAllWorkspaces();
       log.info("Cleanup complete");
       process.exit(0);
     } catch (err) {
@@ -71,9 +78,9 @@ async function main(): Promise<void> {
   process.on("SIGTERM", () => shutdown("SIGTERM"));
   process.on("SIGUSR2", () => scheduleRestart("SIGUSR2"));
 
-  // Start the app
-  await app.start();
-  log.info("Bot is running in Socket Mode");
+  // Start all workspace apps
+  await startAllWorkspaces();
+  log.info("All bots running in Socket Mode", { workspaces: workspaceApps.length });
 
   // Give socket connection time to fully establish before recovery
   await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -81,7 +88,9 @@ async function main(): Promise<void> {
   // Recover any interrupted requests from previous run
   await recoverPendingRequests();
 
-  log.info("Ode is ready! Waiting for messages...");
+  log.info("Ode is ready! Waiting for messages...", {
+    workspaces: workspaceApps.map((w) => w.workspaceName),
+  });
 }
 
 main().catch((err) => {

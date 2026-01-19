@@ -17,9 +17,10 @@ import {
 } from "../storage/settings";
 import { getSessionsWithPendingRequests } from "../storage";
 import { cancelActiveRequest, abortSession } from "../agents";
+import type { App } from "@slack/bolt";
 
-export function setupSlashCommands(): void {
-  const slackApp = getApp();
+export function setupSlashCommands(app?: App): void {
+  const slackApp = app ?? getApp();
   const env = loadEnv();
 
   // /ode - Main command with subcommands
@@ -546,8 +547,8 @@ Use \`/ode config edit\` to modify.`,
   });
 }
 
-export function setupInteractiveHandlers(): void {
-  const slackApp = getApp();
+export function setupInteractiveHandlers(app?: App): void {
+  const slackApp = app ?? getApp();
 
   // Handle channel instruction edit modal submission
   slackApp.view("agents_edit_modal", async ({ ack, view }) => {
