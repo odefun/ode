@@ -553,7 +553,10 @@ async function fetchThreadHistory(
   }
 }
 
-function categorizeError(err: unknown): { message: string; suggestion: string } {
+function categorizeError(
+  err: unknown,
+  serverUrlOverride?: string
+): { message: string; suggestion: string } {
   const errorStr = err instanceof Error ? err.message : String(err);
 
   if (errorStr.includes("timeout") || errorStr.includes("ETIMEDOUT")) {
@@ -583,7 +586,7 @@ function categorizeError(err: unknown): { message: string; suggestion: string } 
     errorStr.includes("ENOTFOUND") ||
     errorStr.includes("network")
   ) {
-    const serverUrl = loadEnv().OPENCODE_SERVER_URL;
+    const serverUrl = serverUrlOverride || loadEnv().OPENCODE_SERVER_URL;
     const message = serverUrl
       ? `OpenCode server not accessible on ${serverUrl}`
       : "OpenCode server not accessible";
@@ -727,7 +730,8 @@ async function runOpenCodeRequest(
   phaseLabel: string,
   context: OpenCodeMessageContext,
   options?: OpenCodeOptions,
-  onTodosUpdated?: (todos: TrackedTodo[]) => Promise<void>
+  onTodosUpdated?: (todos: TrackedTodo[]) => Promise<void>,
+  serverUrlOverride?: string
 ): Promise<OpenCodeMessage[] | null> {
   const statusTs = await sendMessage(
     channelId,
@@ -801,7 +805,7 @@ async function runOpenCodeRequest(
     clearInterval(progressTimer);
     stopWatcher();
 
-    const { message: errorMessage, suggestion } = categorizeError(err);
+    const { message: errorMessage, suggestion } = categorizeError(err, serverUrlOverride);
     log.error("Request failed", { channelId, threadId, error: String(err) });
 
     request.state = "failed";
@@ -885,7 +889,23 @@ async function handleUserMessageInternal(
   const sessionEnv = context.opencodeServerUrl
     ? { ...gitEnv, OPENCODE_SERVER_URL: context.opencodeServerUrl }
     : gitEnv;
-  const { sessionId, created } = await getOrCreateSession(channelId, threadId, cwd, sessionEnv);
+
+  let sessionId: string;
+  let created: boolean;
+
+  try {
+    ({ sessionId, created } = await getOrCreateSession(channelId, threadId, cwd, sessionEnv));
+  } catch (err) {
+    const { message, suggestion } = categorizeError(err, context.opencodeServerUrl);
+    log.error("Failed to create OpenCode session", {
+      channelId,
+      threadId,
+      error: String(err),
+      opencodeServerUrl: context.opencodeServerUrl,
+    });
+    await sendMessage(channelId, threadId, `Error: ${message}\n_${suggestion}_`, false);
+    return;
+  }
 
   if (!session) {
     session = {
@@ -945,7 +965,8 @@ async function handleUserMessageInternal(
       "Planning",
       messageContext,
       { agent: "plan" },
-      onTodosUpdated
+      onTodosUpdated,
+      context.opencodeServerUrl
     );
 
     if (!plannerResponses) return;
@@ -996,7 +1017,8 @@ async function handleUserMessageInternal(
       "Building",
       messageContext,
       { agent: "build" },
-      onTodosUpdated
+      onTodosUpdated,
+      context.opencodeServerUrl
     );
 
     if (!buildResponses) return;
@@ -1025,7 +1047,8 @@ async function handleUserMessageInternal(
     "Building",
     messageContext,
     { agent: "build" },
-    onTodosUpdated
+    onTodosUpdated,
+    context.opencodeServerUrl
   );
 
   if (!buildResponses) return;

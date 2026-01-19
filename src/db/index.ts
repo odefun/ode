@@ -6,8 +6,6 @@ type ProfileRecord = {
   id: string;
   opencode_server_url: string | null;
   slack_user_id: string | null;
-  slack_user_email: string | null;
-  full_name: string | null;
 };
 
 let client: SupabaseClient | null = null;
@@ -26,8 +24,8 @@ export async function getProfileBySlackUserId(slackUserId: string): Promise<Prof
   try {
     const supabase = getClient();
     const { data, error } = await supabase
-      .from("profiles")
-      .select("id, opencode_server_url, slack_user_id, slack_user_email, full_name")
+      .from("user_slack_info")
+      .select("id, opencode_server_url, slack_user_id")
       .eq("slack_user_id", slackUserId)
       .maybeSingle();
 
