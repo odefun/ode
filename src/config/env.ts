@@ -30,6 +30,9 @@ const envSchema = z.object({
   // Logging
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
 
+  // OpenCode server
+  OPENCODE_SERVER_URL: z.string().default("http://127.0.0.1:4096"),
+
   // OpenCode diagnostics
   OPENCODE_EVENT_DUMP: z.coerce.boolean().default(false),
 });

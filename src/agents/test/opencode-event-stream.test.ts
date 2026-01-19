@@ -2,7 +2,7 @@ import { afterAll, describe, expect, it } from "bun:test";
 import { createOpencodeClient } from "@opencode-ai/sdk/v2";
 import { statusFromEvent, type ProgressEvent } from "../opencode/client";
 
-const baseUrl = process.env.OPENCODE_TEST_URL || "http://127.0.0.1:8080";
+const baseUrl = process.env.OPENCODE_SERVER_URL || "http://127.0.0.1:4096";
 const testDir = process.env.OPENCODE_TEST_DIR || process.cwd();
 
 const promptText =
