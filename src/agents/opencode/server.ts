@@ -1,16 +1,15 @@
 import {
-  createOpencode,
+  createOpencodeClient,
   type OpencodeClient,
   type EventPermissionAsked,
 } from "@opencode-ai/sdk/v2";
-import { execSync } from "child_process";
 import { log } from "../../logger";
+import { loadEnv } from "../../config";
 
 // Per-session OpenCode instances
 export type SessionEnvironment = Record<string, string>;
 
 interface SessionInstance {
-  instance: Awaited<ReturnType<typeof createOpencode>>;
   client: OpencodeClient;
   handlers: Set<EventHandler>;
   lastActive: number;
@@ -22,39 +21,19 @@ interface SessionInstance {
 const sessionInstances = new Map<string, SessionInstance>();
 const sessionStartPromises = new Map<string, Promise<SessionInstance>>();
 const sessionEnvironments = new Map<string, SessionEnvironment>();
-let envQueue: Promise<unknown> = Promise.resolve();
+let sharedClient: OpencodeClient | null = null;
 
-async function withEnvOverrides<T>(
-  overrides: SessionEnvironment | undefined,
-  fn: () => Promise<T>
-): Promise<T> {
-  if (!overrides || Object.keys(overrides).length === 0) {
-    return fn();
+function resolveServerUrl(): string {
+  return loadEnv().OPENCODE_SERVER_URL;
+}
+
+function getSharedClient(): OpencodeClient {
+  if (!sharedClient) {
+    const baseUrl = resolveServerUrl();
+    sharedClient = createOpencodeClient({ baseUrl });
+    log.info("Using OpenCode server", { baseUrl });
   }
-
-  const run = async () => {
-    const previous: Record<string, string | undefined> = {};
-    for (const [key, value] of Object.entries(overrides)) {
-      previous[key] = process.env[key];
-      process.env[key] = value;
-    }
-
-    try {
-      return await fn();
-    } finally {
-      for (const [key, value] of Object.entries(previous)) {
-        if (value === undefined) {
-          delete process.env[key];
-        } else {
-          process.env[key] = value;
-        }
-      }
-    }
-  };
-
-  const result = envQueue.then(run, run);
-  envQueue = result.then(() => undefined, () => undefined);
-  return result;
+  return sharedClient;
 }
 
 // Cleanup inactive sessions after 10 minutes
@@ -103,15 +82,12 @@ async function getOrCreateSessionInstance(
 
   // Create new instance
   const promise = (async () => {
-    log.info("Creating OpenCode instance for session", { sessionId });
+    log.info("Using OpenCode server for session", { sessionId });
 
     try {
-      const instance = await withEnvOverrides(env, () => createOpencode({ port: 0 }));
-      log.info("OpenCode instance ready", { sessionId, url: instance.server.url });
-
+      const client = getSharedClient();
       const sessionInstance: SessionInstance = {
-        instance,
-        client: instance.client,
+        client,
         handlers: new Set(),
         lastActive: Date.now(),
         eventLoopRunning: false,
@@ -145,7 +121,6 @@ function stopSessionInstance(sessionId: string): void {
 
   session.eventLoopRunning = false;
   session.handlers.clear();
-  session.instance.server.close();
   sessionInstances.delete(sessionId);
   log.info("Stopped OpenCode instance", { sessionId });
 }
@@ -163,9 +138,14 @@ function startSessionEventLoop(sessionId: string, session: SessionInstance): voi
       for await (const globalEvent of events.stream) {
         if (!session.eventLoopRunning) break;
 
-        session.lastActive = Date.now();
         const event = (globalEvent as any).payload ?? globalEvent;
         const directory = (globalEvent as any).directory;
+        const eventSessionId = event?.properties?.sessionID ?? event?.properties?.part?.sessionID;
+        if (eventSessionId && eventSessionId !== sessionId) {
+          continue;
+        }
+
+        session.lastActive = Date.now();
 
         // Handle permissions
         if (event.type === "permission.asked") {
@@ -215,16 +195,15 @@ export async function createSessionInstance(envOverrides?: SessionEnvironment): 
   register: (sessionId: string, env?: SessionEnvironment) => void;
 }> {
   const env = envOverrides ?? {};
-  const instance = await withEnvOverrides(env, () => createOpencode({ port: 0 }));
-  log.info("Created new OpenCode instance", { url: instance.server.url });
+  const client = getSharedClient();
+  log.info("Using OpenCode server for new session");
 
   return {
-    client: instance.client,
+    client,
     register: (sessionId: string, sessionEnv: SessionEnvironment = env) => {
       const normalizedEnv = sessionEnv ?? {};
       const sessionInstance: SessionInstance = {
-        instance,
-        client: instance.client,
+        client,
         handlers: new Set(),
         lastActive: Date.now(),
         eventLoopRunning: false,
@@ -237,7 +216,7 @@ export async function createSessionInstance(envOverrides?: SessionEnvironment): 
       startSessionEventLoop(sessionId, sessionInstance);
       ensureCleanupInterval();
 
-      log.info("Registered OpenCode instance for session", { sessionId });
+      log.info("Registered OpenCode session", { sessionId });
     },
   };
 }
@@ -253,7 +232,8 @@ export function getSessionEnvironment(sessionId: string): SessionEnvironment | n
 }
 
 export function getSessionServerUrl(sessionId: string): string | null {
-  return sessionInstances.get(sessionId)?.instance.server.url ?? null;
+  if (!sessionInstances.has(sessionId)) return null;
+  return resolveServerUrl();
 }
 
 // Subscribe to events for a session (sync if instance exists, else queues)
@@ -303,14 +283,14 @@ export async function ensureValidSession(
   }
 
   // Session doesn't exist in this instance - create a new one
-  log.info("Creating new session in existing instance (stale sessionId)", { oldSessionId: sessionId });
+  log.info("Creating new session for server", { oldSessionId: sessionId });
 
   const result = await session.client.session.create({
     directory: workingPath,
   });
 
   if (!result.data?.id) {
-    throw new Error("Failed to create session in instance");
+    throw new Error("Failed to create session in server");
   }
 
   const newSessionId = result.data.id;
@@ -320,7 +300,7 @@ export async function ensureValidSession(
   sessionInstances.delete(sessionId);
   sessionInstances.set(newSessionId, session);
 
-  log.info("Created new session in instance", { oldSessionId: sessionId, newSessionId });
+  log.info("Created new session on server", { oldSessionId: sessionId, newSessionId });
 
   return newSessionId;
 }
@@ -345,44 +325,17 @@ export function stopAllSessions(): void {
     stopSessionInstance(sessionId);
   }
 
-  // Fallback: kill any orphaned opencode serve processes
-  try {
-    execSync('pkill -f "opencode serve" 2>/dev/null || true', { stdio: 'ignore' });
-  } catch {
-    // Ignore errors - pkill returns non-zero if no processes found
-  }
-
-  log.info("All OpenCode instances stopped");
+  log.info("All OpenCode sessions stopped");
 }
 
 // Get any available client (for operations that don't need a specific session)
 export async function getAnyClient(): Promise<OpencodeClient> {
-  // Use existing session if available
-  const firstSession = sessionInstances.values().next().value;
-  if (firstSession) {
-    firstSession.lastActive = Date.now();
-    return firstSession.client;
-  }
-
-  // Create a temporary instance
-  const instance = await createOpencode({ port: 0 });
-  log.debug("Created temporary OpenCode instance for query");
-  return instance.client;
+  return getSharedClient();
 }
 
 // Get URL from any available instance
 export async function getAnyServerUrl(): Promise<string> {
-  // Use existing session if available
-  const firstSession = sessionInstances.values().next().value;
-  if (firstSession) {
-    firstSession.lastActive = Date.now();
-    return firstSession.instance.server.url;
-  }
-
-  // Create a temporary instance
-  const instance = await createOpencode({ port: 0 });
-  log.debug("Created temporary OpenCode instance for URL");
-  return instance.server.url;
+  return resolveServerUrl();
 }
 
 // Legacy compatibility
@@ -395,8 +348,7 @@ export function getServerUrl(): string {
 }
 
 export async function startServer(): Promise<void> {
-  // No-op for compatibility - instances are created on-demand
-  log.debug("startServer() called - instances are now per-session");
+  log.debug("startServer() called - using external OpenCode server");
 }
 
 export async function stopServer(): Promise<void> {
@@ -404,5 +356,5 @@ export async function stopServer(): Promise<void> {
 }
 
 export function isServerReady(): boolean {
-  return true; // Always "ready" since instances are created on-demand
+  return true;
 }

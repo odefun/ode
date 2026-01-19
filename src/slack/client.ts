@@ -574,10 +574,19 @@ function categorizeError(err: unknown): { message: string; suggestion: string } 
     };
   }
 
-  if (errorStr.includes("network") || errorStr.includes("ECONNREFUSED") || errorStr.includes("ENOTFOUND")) {
+  if (
+    errorStr.includes("ConnectionRefused") ||
+    errorStr.includes("ECONNREFUSED") ||
+    errorStr.includes("ENOTFOUND") ||
+    errorStr.includes("network")
+  ) {
+    const serverUrl = loadEnv().OPENCODE_SERVER_URL;
+    const message = serverUrl
+      ? `OpenCode server not accessible on ${serverUrl}`
+      : "OpenCode server not accessible";
     return {
-      message: "Network error",
-      suggestion: "Unable to connect to the service. Check your network connection.",
+      message,
+      suggestion: "Check that the OpenCode server is running and reachable.",
     };
   }
 
