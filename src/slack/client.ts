@@ -43,13 +43,16 @@ import {
 } from "../agents";
 import { statusFromEvent, type ProgressEvent } from "../agents/opencode";
 import { log } from "../logger";
+import { getProfileBySlackUserId } from "../db";
 
 export interface MessageContext {
   channelId: string;
   threadId: string;
   userId: string;
   messageId: string;
+  opencodeServerUrl?: string;
 }
+
 
 let app: App | null = null;
 let botUserId: string | null = null;
@@ -879,7 +882,10 @@ async function handleUserMessageInternal(
   let session = loadSession(channelId, threadId);
   const threadOwnerUserId = session?.threadOwnerUserId ?? context.userId;
   const gitEnv = buildGitEnvironmentForUser(threadOwnerUserId);
-  const { sessionId, created } = await getOrCreateSession(channelId, threadId, cwd, gitEnv);
+  const sessionEnv = context.opencodeServerUrl
+    ? { ...gitEnv, OPENCODE_SERVER_URL: context.opencodeServerUrl }
+    : gitEnv;
+  const { sessionId, created } = await getOrCreateSession(channelId, threadId, cwd, sessionEnv);
 
   if (!session) {
     session = {
@@ -1316,6 +1322,15 @@ export function setupMessageHandlers(): void {
       text: cleanText.slice(0, 100) + (cleanText.length > 100 ? "..." : ""),
     });
 
+    log.info("[RECV] Slack user id", { userId });
+    const profile = await getProfileBySlackUserId(userId);
+    log.info("[RECV] Supabase profile lookup", {
+      userId,
+      found: Boolean(profile),
+      profile,
+      opencodeServerUrl: profile?.opencode_server_url ?? null,
+    });
+
     if (!cleanText) {
       await say({
         text: "Hi! How can I help you? Just ask me anything.",
@@ -1329,6 +1344,7 @@ export function setupMessageHandlers(): void {
       threadId,
       userId,
       messageId: message.ts,
+      opencodeServerUrl: profile?.opencode_server_url ?? undefined,
     };
 
     await handleUserMessage(context, cleanText, client);
@@ -1360,6 +1376,14 @@ export function setupMessageHandlers(): void {
       text: cleanText.slice(0, 100) + (cleanText.length > 100 ? "..." : ""),
     });
 
+    log.info("[RECV] Slack user id", { userId });
+    const profile = await getProfileBySlackUserId(userId);
+    log.info("[RECV] Supabase profile lookup", {
+      userId,
+      found: Boolean(profile),
+      opencodeServerUrl: profile?.opencode_server_url ?? null,
+    });
+
     if (!cleanText) {
       await say({
         text: "Hi! How can I help you? Just ask me anything.",
@@ -1373,6 +1397,7 @@ export function setupMessageHandlers(): void {
       threadId,
       userId,
       messageId: event.ts,
+      opencodeServerUrl: profile?.opencode_server_url ?? undefined,
     };
 
     await handleUserMessage(context, cleanText, client);

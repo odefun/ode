@@ -16,24 +16,31 @@ interface SessionInstance {
   eventLoopRunning: boolean;
   validSessionIds: Set<string>; // Sessions created in this instance
   env: SessionEnvironment;
+  baseUrl: string;
 }
 
 const sessionInstances = new Map<string, SessionInstance>();
 const sessionStartPromises = new Map<string, Promise<SessionInstance>>();
 const sessionEnvironments = new Map<string, SessionEnvironment>();
-let sharedClient: OpencodeClient | null = null;
+const clientByBaseUrl = new Map<string, OpencodeClient>();
 
 function resolveServerUrl(): string {
   return loadEnv().OPENCODE_SERVER_URL;
 }
 
-function getSharedClient(): OpencodeClient {
-  if (!sharedClient) {
-    const baseUrl = resolveServerUrl();
-    sharedClient = createOpencodeClient({ baseUrl });
-    log.info("Using OpenCode server", { baseUrl });
-  }
-  return sharedClient;
+function resolveServerUrlForEnv(env?: SessionEnvironment): string {
+  const override = env?.OPENCODE_SERVER_URL;
+  if (override && override.trim().length > 0) return override;
+  return resolveServerUrl();
+}
+
+function getClientForBaseUrl(baseUrl: string): OpencodeClient {
+  const existing = clientByBaseUrl.get(baseUrl);
+  if (existing) return existing;
+  const client = createOpencodeClient({ baseUrl });
+  clientByBaseUrl.set(baseUrl, client);
+  log.info("Using OpenCode server", { baseUrl });
+  return client;
 }
 
 // Cleanup inactive sessions after 10 minutes
@@ -80,12 +87,14 @@ async function getOrCreateSessionInstance(
     sessionEnvironments.set(sessionId, env);
   }
 
+  const baseUrl = resolveServerUrlForEnv(env);
+
   // Create new instance
   const promise = (async () => {
-    log.info("Using OpenCode server for session", { sessionId });
+    log.info("Using OpenCode server for session", { sessionId, baseUrl });
 
     try {
-      const client = getSharedClient();
+      const client = getClientForBaseUrl(baseUrl);
       const sessionInstance: SessionInstance = {
         client,
         handlers: new Set(),
@@ -93,6 +102,7 @@ async function getOrCreateSessionInstance(
         eventLoopRunning: false,
         validSessionIds: new Set(),
         env,
+        baseUrl,
       };
 
       sessionInstances.set(sessionId, sessionInstance);
@@ -195,20 +205,23 @@ export async function createSessionInstance(envOverrides?: SessionEnvironment): 
   register: (sessionId: string, env?: SessionEnvironment) => void;
 }> {
   const env = envOverrides ?? {};
-  const client = getSharedClient();
-  log.info("Using OpenCode server for new session");
+  const baseUrl = resolveServerUrlForEnv(env);
+  const client = getClientForBaseUrl(baseUrl);
+  log.info("Using OpenCode server for new session", { baseUrl });
 
   return {
     client,
     register: (sessionId: string, sessionEnv: SessionEnvironment = env) => {
       const normalizedEnv = sessionEnv ?? {};
+      const normalizedBaseUrl = resolveServerUrlForEnv(normalizedEnv);
       const sessionInstance: SessionInstance = {
-        client,
+        client: getClientForBaseUrl(normalizedBaseUrl),
         handlers: new Set(),
         lastActive: Date.now(),
         eventLoopRunning: false,
         validSessionIds: new Set([sessionId]), // This session is valid in this instance
         env: normalizedEnv,
+        baseUrl: normalizedBaseUrl,
       };
 
       sessionInstances.set(sessionId, sessionInstance);
@@ -232,8 +245,8 @@ export function getSessionEnvironment(sessionId: string): SessionEnvironment | n
 }
 
 export function getSessionServerUrl(sessionId: string): string | null {
-  if (!sessionInstances.has(sessionId)) return null;
-  return resolveServerUrl();
+  const session = sessionInstances.get(sessionId);
+  return session?.baseUrl ?? null;
 }
 
 // Subscribe to events for a session (sync if instance exists, else queues)
@@ -325,12 +338,14 @@ export function stopAllSessions(): void {
     stopSessionInstance(sessionId);
   }
 
+  clientByBaseUrl.clear();
+
   log.info("All OpenCode sessions stopped");
 }
 
 // Get any available client (for operations that don't need a specific session)
 export async function getAnyClient(): Promise<OpencodeClient> {
-  return getSharedClient();
+  return getClientForBaseUrl(resolveServerUrl());
 }
 
 // Get URL from any available instance
