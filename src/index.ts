@@ -5,6 +5,7 @@ import {
   setupInteractiveHandlers,
   stopOAuthServer,
   recoverPendingRequests,
+  initializeWorkspaceAuth,
 } from "./slack";
 import { spawn } from "child_process";
 import { stopServer } from "./agents";
@@ -18,7 +19,10 @@ async function main(): Promise<void> {
   const env = loadEnv();
   log.info("Config loaded", { logLevel: env.LOG_LEVEL, defaultCwd: env.DEFAULT_CWD });
 
-  // Create Slack app
+  // Load workspace auth mappings (env + DB bot tokens)
+  await initializeWorkspaceAuth();
+
+  // Create Slack app (single Socket Mode connection)
   const app = createSlackApp();
   log.info("Slack app created");
 

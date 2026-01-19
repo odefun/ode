@@ -5,6 +5,7 @@ export {
   deleteMessage,
   setupMessageHandlers,
   recoverPendingRequests,
+  initializeWorkspaceAuth,
   type MessageContext,
 } from "./client";
 
