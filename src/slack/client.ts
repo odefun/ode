@@ -57,7 +57,7 @@ export interface MessageContext {
 
 
 let app: App | null = null;
-let botUserId: string | null = null;
+
 
 type WorkspaceAuth = {
   botToken: string;
@@ -1446,18 +1446,14 @@ export function setupMessageHandlers(): void {
     registerChannelBotToken(channelId, client.token);
 
     // Get bot user ID for this workspace
-    let currentBotUserId: string | null = botUserId;
-    if (!currentBotUserId) {
-      const authResult = await client.auth.test();
-      currentBotUserId = authResult.user_id as string;
-      botUserId = currentBotUserId;
-      if (authResult.team_id) {
-        const auth = resolveWorkspaceAuth(authResult.team_id, authResult.enterprise_id ?? undefined);
-        if (auth?.workspaceName && !channelWorkspaceMap.has(channelId)) {
-          channelWorkspaceMap.set(channelId, auth.workspaceName);
-        }
-        registerChannelBotToken(channelId, auth?.botToken);
+    const authResult = await client.auth.test();
+    const currentBotUserId = authResult.user_id as string;
+    if (authResult.team_id) {
+      const auth = resolveWorkspaceAuth(authResult.team_id, authResult.enterprise_id ?? undefined);
+      if (auth?.workspaceName && !channelWorkspaceMap.has(channelId)) {
+        channelWorkspaceMap.set(channelId, auth.workspaceName);
       }
+      registerChannelBotToken(channelId, auth?.botToken);
     }
 
     if (userId === currentBotUserId) return;
@@ -1541,18 +1537,14 @@ export function setupMessageHandlers(): void {
     if (!userId) return;
     registerChannelBotToken(channelId, client.token);
 
-    let currentBotUserId: string | null = botUserId;
-    if (!currentBotUserId) {
-      const authResult = await client.auth.test();
-      currentBotUserId = authResult.user_id as string;
-      botUserId = currentBotUserId;
-      if (authResult.team_id) {
-        const auth = resolveWorkspaceAuth(authResult.team_id, authResult.enterprise_id ?? undefined);
-        if (auth?.workspaceName && !channelWorkspaceMap.has(channelId)) {
-          channelWorkspaceMap.set(channelId, auth.workspaceName);
-        }
-        registerChannelBotToken(channelId, auth?.botToken);
+    const authResult = await client.auth.test();
+    const currentBotUserId = authResult.user_id as string;
+    if (authResult.team_id) {
+      const auth = resolveWorkspaceAuth(authResult.team_id, authResult.enterprise_id ?? undefined);
+      if (auth?.workspaceName && !channelWorkspaceMap.has(channelId)) {
+        channelWorkspaceMap.set(channelId, auth.workspaceName);
       }
+      registerChannelBotToken(channelId, auth?.botToken);
     }
 
     const workspaceName = channelWorkspaceMap.get(channelId) || "unknown";
