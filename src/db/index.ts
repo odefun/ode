@@ -16,8 +16,8 @@ function getClient(): SupabaseClient {
   if (client) return client;
   const env = loadEnv();
   client = createClient(
-    env.PUBLIC_SUPABASE_URL,
-    env.PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY
+    env.SUPABASE_URL,
+    env.SUPABASE_SECRET_KEY
   );
   return client;
 }

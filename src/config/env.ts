@@ -36,9 +36,8 @@ const envSchema = z.object({
   // OpenCode diagnostics
   OPENCODE_EVENT_DUMP: z.coerce.boolean().default(false),
 
-  // Supabase
-  PUBLIC_SUPABASE_URL: z.string().url(),
-  PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY: z.string(),
+  SUPABASE_URL: z.string().optional(),
+  SUPABASE_SECRET_KEY: z.string().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;
