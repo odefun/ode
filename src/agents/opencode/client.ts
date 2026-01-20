@@ -400,12 +400,20 @@ export function statusFromEvent(event: ProgressEvent, sessionId: string): string
   const payload = event.payload;
   if (!payload?.type) return null;
 
+  const properties = payload.properties as Record<string, unknown> | undefined;
+  const eventSessionId =
+    typeof properties?.sessionID === "string"
+      ? properties.sessionID
+      : typeof (properties as { sessionId?: unknown } | undefined)?.sessionId === "string"
+        ? (properties as { sessionId?: string }).sessionId
+        : undefined;
+
   if (payload.type === "session.status") {
-    const properties = payload.properties as
+    const sessionProperties = payload.properties as
       | { sessionID?: string; status?: unknown }
       | undefined;
-    if (properties?.sessionID === sessionId) {
-      return formatProgressStatus(statusFromSessionStatus(properties.status));
+    if (sessionProperties?.sessionID === sessionId) {
+      return formatProgressStatus(statusFromSessionStatus(sessionProperties?.status));
     }
     return null;
   }
@@ -419,15 +427,41 @@ export function statusFromEvent(event: ProgressEvent, sessionId: string): string
   }
 
   if (payload.type === "message.part.updated") {
-    const properties = payload.properties as
+    const partProperties = payload.properties as
       | { part?: Record<string, unknown> }
       | undefined;
-    const part = properties?.part;
+    const part = partProperties?.part;
     const partSessionId =
       part && typeof part.sessionID === "string" ? part.sessionID : undefined;
     if (!part || partSessionId !== sessionId) return null;
     const status = statusFromPart(part);
     return status ? formatProgressStatus(status) : null;
+  }
+
+  if (eventSessionId && eventSessionId !== sessionId) {
+    return null;
+  }
+
+  switch (payload.type) {
+    case "command.executed":
+      return formatProgressStatus("Command executed");
+    case "session.updated":
+      return formatProgressStatus("Updating session");
+    case "session.summary": {
+      const title = typeof properties?.title === "string" ? properties.title : undefined;
+      return formatProgressStatus(title ? `Summarizing: ${title}` : "Summarizing session");
+    }
+    case "message.updated":
+      return formatProgressStatus("Updating message");
+    case "question":
+      return formatProgressStatus("Asking question");
+    case "question.asked":
+      return formatProgressStatus("Awaiting response");
+    case "scheduler.run":
+    case "snapshot.cleanup":
+      return formatProgressStatus("Running maintenance");
+    default:
+      return null;
   }
 
   return null;
