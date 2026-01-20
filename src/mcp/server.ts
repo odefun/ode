@@ -32,21 +32,7 @@ interface Tool {
 }
 
 // Get Slack client from environment or .env file
-let SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
-
-// If not in env, try to load from .env file
-if (!SLACK_BOT_TOKEN) {
-  try {
-    const envPath = "/root/ode/.env";
-    const envContent = require("fs").readFileSync(envPath, "utf-8");
-    const match = envContent.match(/^SLACK_BOT_TOKEN=(.+)$/m);
-    if (match) {
-      SLACK_BOT_TOKEN = match[1].trim().replace(/^["']|["']$/g, "");
-    }
-  } catch {
-    // Ignore file read errors
-  }
-}
+const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 
 async function slackApiCall(method: string, body: Record<string, unknown>): Promise<unknown> {
   if (!SLACK_BOT_TOKEN) {
