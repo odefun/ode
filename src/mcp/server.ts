@@ -4,6 +4,7 @@
  * Exposes Slack functionality to OpenCode via the Model Context Protocol
  */
 
+import * as path from "path";
 import * as readline from "readline";
 
 // Types for MCP protocol
@@ -56,6 +57,40 @@ async function slackApiCall(method: string, body: Record<string, unknown>): Prom
       "Content-Type": "application/x-www-form-urlencoded",
     },
     body: formBody.toString(),
+  });
+
+  const data = await response.json() as { ok: boolean; error?: string; needed?: string };
+  if (!data.ok) {
+    const detail = data.needed ? ` (needed: ${data.needed})` : "";
+    throw new Error(`Slack API error: ${data.error}${detail}`);
+  }
+
+  return data;
+}
+
+async function slackFileUpload(body: Record<string, string>, filePath: string): Promise<unknown> {
+  if (!SLACK_BOT_TOKEN) {
+    throw new Error("SLACK_BOT_TOKEN not set");
+  }
+
+  const file = Bun.file(filePath);
+  const exists = await file.exists();
+  if (!exists) {
+    throw new Error(`File not found: ${filePath}`);
+  }
+
+  const formData = new FormData();
+  for (const [key, value] of Object.entries(body)) {
+    formData.append(key, value);
+  }
+  formData.append("file", file);
+
+  const response = await fetch("https://slack.com/api/files.upload", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${SLACK_BOT_TOKEN}`,
+    },
+    body: formData,
   });
 
   const data = await response.json() as { ok: boolean; error?: string; needed?: string };
@@ -135,6 +170,22 @@ const tools: Tool[] = [
         text: { type: "string", description: "The message text" },
       },
       required: ["channel", "thread_ts", "text"],
+    },
+  },
+  {
+    name: "upload_file",
+    description: "Upload a file (image) to a Slack thread and post it as a message",
+    inputSchema: {
+      type: "object",
+      properties: {
+        channel: { type: "string", description: "The Slack channel ID" },
+        thread_ts: { type: "string", description: "The thread timestamp" },
+        file_path: { type: "string", description: "Absolute path to the file to upload" },
+        filename: { type: "string", description: "Optional filename override" },
+        title: { type: "string", description: "Optional title shown in Slack" },
+        initial_comment: { type: "string", description: "Optional comment to include with the file" },
+      },
+      required: ["channel", "thread_ts", "file_path"],
     },
   },
 ];
@@ -240,6 +291,31 @@ Email: ${user.profile?.email || "(hidden)"}`;
       });
 
       return "Message posted";
+    }
+
+    case "upload_file": {
+      const { channel, thread_ts, file_path, filename, title, initial_comment } = args as {
+        channel: string;
+        thread_ts: string;
+        file_path: string;
+        filename?: string;
+        title?: string;
+        initial_comment?: string;
+      };
+
+      const resolvedFilename = filename || path.basename(file_path);
+      const payload: Record<string, string> = {
+        channels: channel,
+        thread_ts,
+        filename: resolvedFilename,
+      };
+
+      if (title) payload.title = title;
+      if (initial_comment) payload.initial_comment = initial_comment;
+
+      await slackFileUpload(payload, file_path);
+
+      return "File uploaded";
     }
 
     default:
