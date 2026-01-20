@@ -1,5 +1,6 @@
 import { App, type AllMiddlewareArgs } from "@slack/bolt";
 import { WebClient } from "@slack/web-api";
+import type { QuestionInfo } from "@opencode-ai/sdk/v2";
 import { loadEnv, getTargetChannels } from "../config";
 import { markdownToSlack, splitForSlack } from "./formatter";
 import {
@@ -26,7 +27,11 @@ import {
   getSessionsWithPendingRequests,
   isMessageProcessed,
   markMessageProcessed,
+  getPendingQuestion,
+  setPendingQuestion,
+  clearPendingQuestion,
   type ActiveRequest,
+  type PendingQuestion,
   type PersistedSession,
   type TrackedTool,
   type TrackedTodo,
@@ -42,7 +47,7 @@ import {
   type OpenCodeMessageContext,
   type OpenCodeOptions,
 } from "../agents";
-import { statusFromEvent, type ProgressEvent } from "../agents/opencode";
+import { getSessionClient, statusFromEvent, type ProgressEvent } from "../agents/opencode";
 import { log } from "../logger";
 import { getAllBotTokens, getProfileBySlackUserId } from "../db";
 
@@ -749,6 +754,118 @@ function categorizeError(
   };
 }
 
+type NormalizedQuestion = {
+  question: string;
+  options?: string[];
+  multiple?: boolean;
+  custom?: boolean;
+};
+
+function normalizeQuestions(questions?: QuestionInfo[]): NormalizedQuestion[] {
+  if (!questions || questions.length === 0) return [];
+  return questions
+    .map((question) => {
+      const prompt = typeof question.question === "string" ? question.question.trim() : "";
+      const options = Array.isArray(question.options)
+        ? question.options
+            .map((option) => (typeof option?.label === "string" ? option.label : ""))
+            .filter((label) => label.length > 0)
+        : undefined;
+      return {
+        question: prompt,
+        options: options && options.length > 0 ? options : undefined,
+        multiple: question.multiple,
+        custom: question.custom,
+      };
+    })
+    .filter((question) => question.question.length > 0);
+}
+
+function formatQuestionPrompt(questions: NormalizedQuestion[]): string {
+  const lines = questions.map((question, index) => {
+    const prefix = questions.length > 1 ? `${index + 1}. ` : "";
+    const optionText = question.options?.length
+      ? `\nOptions: ${question.options.join(" / ")}`
+      : "";
+    return `${prefix}${question.question}${optionText}`;
+  });
+
+  const instructions = questions.length > 1
+    ? "Reply with one line per question."
+    : "Reply in this thread.";
+
+  return `${lines.join("\n\n")}\n\n_${instructions}_`;
+}
+
+function buildQuestionAnswers(
+  questions: NormalizedQuestion[],
+  responseText: string
+): Array<Array<string>> {
+  const trimmed = responseText.trim();
+  if (questions.length <= 1) {
+    return [[trimmed]];
+  }
+
+  const lines = trimmed
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+
+  return questions.map((_, index) => {
+    const line = lines[index] ?? "";
+    return [line];
+  });
+}
+
+async function handlePendingQuestionReply(
+  pendingQuestion: PendingQuestion,
+  channelId: string,
+  threadId: string,
+  userId: string,
+  text: string,
+  messageId: string
+): Promise<boolean> {
+  if (isMessageProcessed(messageId)) {
+    log.debug("Skipping duplicate question reply", { messageId });
+    return true;
+  }
+
+  const session = loadSession(channelId, threadId);
+  const threadOwnerUserId = session?.threadOwnerUserId;
+  if (threadOwnerUserId && threadOwnerUserId !== userId) {
+    return false;
+  }
+
+  const trimmed = text.trim();
+  if (!trimmed) {
+    await sendMessage(channelId, threadId, "Please reply with an answer.", false);
+    return true;
+  }
+
+  markMessageProcessed(messageId);
+
+  try {
+    const client = await getSessionClient(pendingQuestion.sessionId);
+    const answers = buildQuestionAnswers(pendingQuestion.questions, trimmed);
+    const response = await client.question.reply({
+      requestID: pendingQuestion.requestId,
+      directory: session?.workingDirectory,
+      answers,
+    });
+
+    if (response.error) {
+      throw new Error(`OpenCode question reply error: ${response.error}`);
+    }
+
+    clearPendingQuestion(channelId, threadId);
+    return true;
+  } catch (err) {
+    log.error("Failed to answer OpenCode question", { error: String(err) });
+    await sendMessage(channelId, threadId, "Failed to submit your answer. Please try again.", false);
+    return true;
+  }
+}
+
 async function startEventStreamWatcher(
   request: ActiveRequest,
   workingPath: string,
@@ -817,6 +934,35 @@ async function startEventStreamWatcher(
       }));
       void onTodoUpdate?.(request.todos);
       onUpdate();
+    } else if (event.type === "question.asked") {
+      const properties = event.properties as {
+        id?: string;
+        sessionID?: string;
+        questions?: QuestionInfo[];
+      };
+      const requestId = properties?.id;
+      if (!requestId) return;
+
+      const existingQuestion = getPendingQuestion(request.channelId, request.threadId);
+      if (existingQuestion?.requestId === requestId) return;
+
+      const normalized = normalizeQuestions(properties.questions);
+      if (normalized.length === 0) return;
+
+      request.currentStatus = "Awaiting response";
+      onUpdate();
+
+      void (async () => {
+        const prompt = formatQuestionPrompt(normalized);
+        const messageTs = await sendMessage(request.channelId, request.threadId, prompt, false);
+        setPendingQuestion(request.channelId, request.threadId, {
+          requestId,
+          sessionId: properties.sessionID ?? request.sessionId,
+          askedAt: Date.now(),
+          questions: normalized,
+          messageTs: messageTs || undefined,
+        });
+      })();
     } else if (event.type === "session.status") {
       const status = event.properties?.status;
       if (status?.type === "busy") {
@@ -1466,6 +1612,21 @@ export function setupMessageHandlers(): void {
           text: "Request stopped.",
           thread_ts: threadId,
         });
+        return;
+      }
+    }
+
+    const pendingQuestion = getPendingQuestion(channelId, threadId);
+    if (pendingQuestion && message.ts) {
+      const handled = await handlePendingQuestionReply(
+        pendingQuestion,
+        channelId,
+        threadId,
+        userId,
+        text,
+        message.ts
+      );
+      if (handled) {
         return;
       }
     }

@@ -45,6 +45,19 @@ export interface SessionPlan {
   text?: string;
 }
 
+export interface PendingQuestion {
+  requestId: string;
+  sessionId: string;
+  askedAt: number;
+  questions: Array<{
+    question: string;
+    options?: string[];
+    multiple?: boolean;
+    custom?: boolean;
+  }>;
+  messageTs?: string;
+}
+
 export interface PersistedSession {
   sessionId: string;
   channelId: string;
@@ -55,6 +68,7 @@ export interface PersistedSession {
   lastActivityAt: number;
   activeRequest?: ActiveRequest;
   plan?: SessionPlan;
+  pendingQuestion?: PendingQuestion;
 }
 
 // In-memory cache
@@ -197,6 +211,29 @@ export function clearActiveRequest(channelId: string, threadId: string): void {
   if (!session) return;
 
   delete session.activeRequest;
+  saveSession(session);
+}
+
+export function getPendingQuestion(channelId: string, threadId: string): PendingQuestion | null {
+  const session = loadSession(channelId, threadId);
+  return session?.pendingQuestion ?? null;
+}
+
+export function setPendingQuestion(
+  channelId: string,
+  threadId: string,
+  pendingQuestion: PendingQuestion
+): void {
+  const session = loadSession(channelId, threadId);
+  if (!session) return;
+  session.pendingQuestion = pendingQuestion;
+  saveSession(session);
+}
+
+export function clearPendingQuestion(channelId: string, threadId: string): void {
+  const session = loadSession(channelId, threadId);
+  if (!session?.pendingQuestion) return;
+  delete session.pendingQuestion;
   saveSession(session);
 }
 
