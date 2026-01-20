@@ -616,6 +616,11 @@ export function buildRichStatusMessage(request: ActiveRequest, workingPath: stri
 
   // Simple status with elapsed time
   const statusText = request.currentStep || request.currentStatus || "Working";
+  if (request.currentStatus === "Awaiting response" && request.currentText) {
+    lines.push(request.currentText);
+    return lines.join("\n");
+  }
+
   lines.push(`_${statusText}_ (${formatElapsedTime(request.startedAt)})`);
 
   const checklistLines = buildChecklistLines(request, workingPath);
@@ -790,11 +795,7 @@ function formatQuestionPrompt(questions: NormalizedQuestion[]): string {
     return `${prefix}${question.question}${optionText}`;
   });
 
-  const instructions = questions.length > 1
-    ? "Reply with one line per question."
-    : "Reply in this thread.";
-
-  return `${lines.join("\n\n")}\n\n_${instructions}_`;
+  return lines.join("\n\n");
 }
 
 function buildQuestionAnswers(
@@ -882,6 +883,22 @@ async function startEventStreamWatcher(
   // Subscribe to events for this session via the shared dispatcher
   const unsubscribe = subscribeToSession(request.sessionId, (globalEvent: unknown) => {
     const event = (globalEvent as any).payload ?? globalEvent;
+    const pendingQuestion = getPendingQuestion(request.channelId, request.threadId);
+
+    if (pendingQuestion) {
+      if (event.type === "question.replied" || event.type === "question.rejected") {
+        const requestId = event.properties?.requestID;
+        if (!requestId || requestId !== pendingQuestion.requestId) {
+          return;
+        }
+        clearPendingQuestion(request.channelId, request.threadId);
+        onUpdate();
+        return;
+      }
+      if (event.type !== "question.asked") {
+        return;
+      }
+    }
 
     if (event.type === "message.part.updated") {
       const part = event.properties?.part;
@@ -950,17 +967,25 @@ async function startEventStreamWatcher(
       if (normalized.length === 0) return;
 
       request.currentStatus = "Awaiting response";
+      request.currentStep = undefined;
+      request.statusFrozen = true;
+      const prompt = formatQuestionPrompt(normalized);
+      request.currentText = prompt;
       onUpdate();
 
       void (async () => {
-        const prompt = formatQuestionPrompt(normalized);
-        const messageTs = await sendMessage(request.channelId, request.threadId, prompt, false);
+        await updateMessageThrottled(
+          request.channelId,
+          request.statusMessageTs,
+          buildRichStatusMessage(request, workingPath),
+          false
+        );
         setPendingQuestion(request.channelId, request.threadId, {
           requestId,
           sessionId: properties.sessionID ?? request.sessionId,
           askedAt: Date.now(),
           questions: normalized,
-          messageTs: messageTs || undefined,
+          messageTs: request.statusMessageTs,
         });
       })();
     } else if (event.type === "session.status") {
@@ -1047,13 +1072,16 @@ async function runOpenCodeRequest(
     }
 
     const statusText = buildRichStatusMessage(request, cwd);
-    await updateMessageThrottled(channelId, statusTs, statusText, false);
+    if (!request.statusFrozen) {
+      await updateMessageThrottled(channelId, statusTs, statusText, false);
+    }
     updateActiveRequest(channelId, threadId, {
       currentStatus: request.currentStatus,
       currentStep: request.currentStep,
       currentText: request.currentText,
       tools: request.tools,
       todos: request.todos,
+      statusFrozen: request.statusFrozen,
     });
   }, 2000);
 
@@ -1079,7 +1107,9 @@ async function runOpenCodeRequest(
     stopWatcher();
     request.state = "completed";
 
-    await deleteMessage(channelId, statusTs);
+    if (!request.statusFrozen) {
+      await deleteMessage(channelId, statusTs);
+    }
     completeActiveRequest(channelId, threadId);
 
     if (responses.length === 0) {

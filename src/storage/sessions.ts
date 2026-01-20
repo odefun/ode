@@ -33,6 +33,7 @@ export interface ActiveRequest {
   currentText: string;
   tools: TrackedTool[];
   todos: TrackedTodo[];
+  statusFrozen?: boolean;
   state: "processing" | "completed" | "failed";
   finalResponseTs?: string;
   error?: string;
@@ -162,6 +163,7 @@ export function createActiveRequest(
     currentText: "",
     tools: [],
     todos: [],
+    statusFrozen: false,
     state: "processing",
   };
 }
