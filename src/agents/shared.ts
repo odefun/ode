@@ -5,6 +5,7 @@ import {
 import type { OpenCodeMessageContext, OpenCodeOptions, PromptPart, SlackContext } from "./types";
 
 export function buildSlackSystemPrompt(slack?: SlackContext): string {
+  return '';
   const lines = [
     "You are running as a Slack bot. Keep these behaviors in mind:",
     "",
