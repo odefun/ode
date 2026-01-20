@@ -5,7 +5,7 @@ import {
 import type { OpenCodeMessageContext, OpenCodeOptions, PromptPart, SlackContext } from "./types";
 
 export function buildSlackSystemPrompt(slack?: SlackContext): string {
-  return '';
+
   const lines = [
     "You are running as a Slack bot. Keep these behaviors in mind:",
     "",
@@ -38,11 +38,12 @@ export function buildSlackSystemPrompt(slack?: SlackContext): string {
   }
 
   lines.push("");
-  lines.push("SLACK TOOLS (via MCP) - use these when appropriate:");
-  lines.push("- slack_ask_user: Show buttons to get user input or confirmation");
-  lines.push("- slack_get_thread_messages: Get earlier messages in this thread");
-  lines.push("- slack_add_reaction: React to a message with an emoji");
-  lines.push("- slack_get_user_info: Look up info about a Slack user");
+  lines.push("- You can use any tool available via mcp or bash, curl");
+  // lines.push("SLACK TOOLS (via MCP) - use these when appropriate:");
+  // lines.push("- slack_ask_user: Show buttons to get user input or confirmation");
+  // lines.push("- slack_get_thread_messages: Get earlier messages in this thread");
+  // lines.push("- slack_add_reaction: React to a message with an emoji");
+  // lines.push("- slack_get_user_info: Look up info about a Slack user");
   lines.push("");
   lines.push("IMPORTANT: Your text output is automatically posted to Slack.");
   lines.push("- If you use slack_ask_user, do NOT also output text - the buttons are enough.");
