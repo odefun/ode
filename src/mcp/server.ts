@@ -32,12 +32,9 @@ interface Tool {
   };
 }
 
-// Get Slack client from environment or .env file
-const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
-
-async function slackApiCall(method: string, body: Record<string, unknown>): Promise<unknown> {
-  if (!SLACK_BOT_TOKEN) {
-    throw new Error("SLACK_BOT_TOKEN not set");
+async function slackApiCall(method: string, body: Record<string, unknown>, token: string): Promise<unknown> {
+  if (!token) {
+    throw new Error("Slack bot token not provided");
   }
 
   // Convert body to form-urlencoded (Slack API prefers this)
@@ -53,7 +50,7 @@ async function slackApiCall(method: string, body: Record<string, unknown>): Prom
   const response = await fetch(`https://slack.com/api/${method}`, {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${SLACK_BOT_TOKEN}`,
+      "Authorization": `Bearer ${token}`,
       "Content-Type": "application/x-www-form-urlencoded",
     },
     body: formBody.toString(),
@@ -68,38 +65,63 @@ async function slackApiCall(method: string, body: Record<string, unknown>): Prom
   return data;
 }
 
-async function slackFileUpload(body: Record<string, string>, filePath: string): Promise<unknown> {
-  if (!SLACK_BOT_TOKEN) {
-    throw new Error("SLACK_BOT_TOKEN not set");
-  }
+interface SlackFileUploadArgs {
+  channel: string;
+  thread_ts?: string;
+  filename: string;
+  title?: string;
+  initial_comment?: string;
+  token: string;
+}
 
+async function slackFileUpload(args: SlackFileUploadArgs, filePath: string): Promise<unknown> {
   const file = Bun.file(filePath);
   const exists = await file.exists();
   if (!exists) {
     throw new Error(`File not found: ${filePath}`);
   }
 
-  const formData = new FormData();
-  for (const [key, value] of Object.entries(body)) {
-    formData.append(key, value);
-  }
-  formData.append("file", file);
+  const fileSize = typeof file.size === "number" && file.size > 0
+    ? file.size
+    : (await file.arrayBuffer()).byteLength;
 
-  const response = await fetch("https://slack.com/api/files.upload", {
+  const uploadInfo = await slackApiCall("files.getUploadURLExternal", {
+    filename: args.filename,
+    length: fileSize,
+  }, args.token) as { upload_url?: string; file_id?: string };
+
+  if (!uploadInfo.upload_url || !uploadInfo.file_id) {
+    throw new Error("Slack API error: missing upload URL response");
+  }
+
+  const formData = new FormData();
+  formData.append("filename", file, args.filename);
+
+  const response = await fetch(uploadInfo.upload_url, {
     method: "POST",
-    headers: {
-      "Authorization": `Bearer ${SLACK_BOT_TOKEN}`,
-    },
     body: formData,
   });
 
-  const data = await response.json() as { ok: boolean; error?: string; needed?: string };
-  if (!data.ok) {
-    const detail = data.needed ? ` (needed: ${data.needed})` : "";
-    throw new Error(`Slack API error: ${data.error}${detail}`);
+  if (!response.ok) {
+    throw new Error(`Slack upload failed: ${response.status} ${response.statusText}`);
   }
 
-  return data;
+  const completion = await slackApiCall("files.completeUploadExternal", {
+    files: [{ id: uploadInfo.file_id, title: args.title || args.filename }],
+    channel_id: args.channel,
+    thread_ts: args.thread_ts,
+    initial_comment: args.initial_comment,
+  }, args.token);
+
+  return completion;
+}
+
+function requireBotToken(args: Record<string, unknown>): string {
+  const { bot_token } = args as { bot_token?: string };
+  if (!bot_token) {
+    throw new Error("bot_token is required");
+  }
+  return bot_token;
 }
 
 // Tool definitions - names without prefix since OpenCode adds server name prefix
@@ -110,11 +132,12 @@ const tools: Tool[] = [
     inputSchema: {
       type: "object",
       properties: {
+        bot_token: { type: "string", description: "Bot token to use for the request" },
         channel: { type: "string", description: "The Slack channel ID" },
         thread_ts: { type: "string", description: "The thread timestamp" },
         limit: { type: "number", description: "Max messages to retrieve (default 20)" },
       },
-      required: ["channel", "thread_ts"],
+      required: ["bot_token", "channel", "thread_ts"],
     },
   },
   {
@@ -123,6 +146,7 @@ const tools: Tool[] = [
     inputSchema: {
       type: "object",
       properties: {
+        bot_token: { type: "string", description: "Bot token to use for the request" },
         channel: { type: "string", description: "The Slack channel ID" },
         thread_ts: { type: "string", description: "The thread timestamp" },
         question: { type: "string", description: "The question to ask the user" },
@@ -132,7 +156,7 @@ const tools: Tool[] = [
           description: "List of options (2-5 buttons)",
         },
       },
-      required: ["channel", "thread_ts", "question", "options"],
+      required: ["bot_token", "channel", "thread_ts", "question", "options"],
     },
   },
   {
@@ -141,11 +165,12 @@ const tools: Tool[] = [
     inputSchema: {
       type: "object",
       properties: {
+        bot_token: { type: "string", description: "Bot token to use for the request" },
         channel: { type: "string", description: "The Slack channel ID" },
         timestamp: { type: "string", description: "The message timestamp" },
         emoji: { type: "string", description: "Emoji name without colons (e.g., 'thumbsup')" },
       },
-      required: ["channel", "timestamp", "emoji"],
+      required: ["bot_token", "channel", "timestamp", "emoji"],
     },
   },
   {
@@ -154,9 +179,10 @@ const tools: Tool[] = [
     inputSchema: {
       type: "object",
       properties: {
+        bot_token: { type: "string", description: "Bot token to use for the request" },
         user_id: { type: "string", description: "The Slack user ID (e.g., U12345)" },
       },
-      required: ["user_id"],
+      required: ["bot_token", "user_id"],
     },
   },
   {
@@ -165,11 +191,12 @@ const tools: Tool[] = [
     inputSchema: {
       type: "object",
       properties: {
+        bot_token: { type: "string", description: "Bot token to use for the request" },
         channel: { type: "string", description: "The Slack channel ID" },
         thread_ts: { type: "string", description: "The thread timestamp" },
         text: { type: "string", description: "The message text" },
       },
-      required: ["channel", "thread_ts", "text"],
+      required: ["bot_token", "channel", "thread_ts", "text"],
     },
   },
   {
@@ -178,6 +205,7 @@ const tools: Tool[] = [
     inputSchema: {
       type: "object",
       properties: {
+        bot_token: { type: "string", description: "Bot token to use for the request" },
         channel: { type: "string", description: "The Slack channel ID" },
         thread_ts: { type: "string", description: "The thread timestamp" },
         file_path: { type: "string", description: "Absolute path to the file to upload" },
@@ -185,7 +213,7 @@ const tools: Tool[] = [
         title: { type: "string", description: "Optional title shown in Slack" },
         initial_comment: { type: "string", description: "Optional comment to include with the file" },
       },
-      required: ["channel", "thread_ts", "file_path"],
+      required: ["bot_token", "channel", "thread_ts", "file_path"],
     },
   },
 ];
@@ -195,6 +223,7 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
   switch (name) {
     case "get_thread_messages": {
       const { channel, thread_ts, limit = 20 } = args as { channel: string; thread_ts: string; limit?: number };
+      const token = requireBotToken(args);
 
       if (!channel || !thread_ts) {
         throw new Error(`Missing required parameters: channel=${channel}, thread_ts=${thread_ts}`);
@@ -204,7 +233,7 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
         channel,
         ts: thread_ts,
         limit,
-      }) as { messages?: Array<{ user?: string; text?: string; ts?: string }> };
+      }, token) as { messages?: Array<{ user?: string; text?: string; ts?: string }> };
 
       const messages = data.messages || [];
       const formatted = messages.map((m, i) => {
@@ -222,6 +251,7 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
         question: string;
         options: string[];
       };
+      const token = requireBotToken(args);
 
       if (!options || options.length < 2 || options.length > 5) {
         throw new Error("Options must have 2-5 items");
@@ -249,29 +279,31 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
             elements: buttons,
           },
         ],
-      });
+      }, token);
 
       return "Question posted with buttons. The user's response will come in their next message.";
     }
 
     case "add_reaction": {
       const { channel, timestamp, emoji } = args as { channel: string; timestamp: string; emoji: string };
+      const token = requireBotToken(args);
 
       await slackApiCall("reactions.add", {
         channel,
         timestamp,
         name: emoji.replace(/:/g, ""),
-      });
+      }, token);
 
       return `Added :${emoji}: reaction`;
     }
 
     case "get_user_info": {
       const { user_id } = args as { user_id: string };
+      const token = requireBotToken(args);
 
       const data = await slackApiCall("users.info", {
         user: user_id,
-      }) as { user?: { name?: string; real_name?: string; profile?: { display_name?: string; email?: string } } };
+      }, token) as { user?: { name?: string; real_name?: string; profile?: { display_name?: string; email?: string } } };
 
       const user = data.user;
       if (!user) return "User not found";
@@ -283,12 +315,13 @@ Email: ${user.profile?.email || "(hidden)"}`;
 
     case "post_message": {
       const { channel, thread_ts, text } = args as { channel: string; thread_ts: string; text: string };
+      const token = requireBotToken(args);
 
       await slackApiCall("chat.postMessage", {
         channel,
         thread_ts,
         text,
-      });
+      }, token);
 
       return "Message posted";
     }
@@ -302,18 +335,17 @@ Email: ${user.profile?.email || "(hidden)"}`;
         title?: string;
         initial_comment?: string;
       };
+      const token = requireBotToken(args);
 
       const resolvedFilename = filename || path.basename(file_path);
-      const payload: Record<string, string> = {
-        channels: channel,
+      await slackFileUpload({
+        channel,
         thread_ts,
         filename: resolvedFilename,
-      };
-
-      if (title) payload.title = title;
-      if (initial_comment) payload.initial_comment = initial_comment;
-
-      await slackFileUpload(payload, file_path);
+        title,
+        initial_comment,
+        token,
+      }, file_path);
 
       return "File uploaded";
     }
