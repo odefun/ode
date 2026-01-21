@@ -35,9 +35,15 @@ export function buildSlackSystemPrompt(slack?: SlackContext): string {
     lines.push(`- Channel: ${slack.channelId}`);
     lines.push(`- Thread: ${slack.threadId}`);
     lines.push(`- User: <@${slack.userId}>`);
+    if (slack.botToken) {
+      lines.push(`- Bot token for Slack tools: ${slack.botToken}`);
+    } else {
+      lines.push("- Bot token for Slack tools: (missing)");
+    }
   }
 
   lines.push("");
+  lines.push("- If you call Slack MCP tools, include bot_token from the Slack context above.");
   lines.push("- You can use any tool available via mcp or bash, curl");
   // lines.push("SLACK TOOLS (via MCP) - use these when appropriate:");
   // lines.push("- slack_ask_user: Show buttons to get user input or confirmation");

@@ -1255,6 +1255,7 @@ async function handleUserMessageInternal(
       channelId,
       threadId,
       userId: threadOwnerUserId,
+      botToken: resolveChannelBotToken(channelId),
       threadHistory: threadHistory || undefined,
     },
   };
@@ -1558,6 +1559,7 @@ export async function handleButtonSelection(
         channelId,
         threadId,
         userId: threadOwnerUserId,
+        botToken: resolveChannelBotToken(channelId),
       },
     };
 

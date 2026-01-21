@@ -16,6 +16,7 @@ export interface SlackContext {
   channelId: string;
   threadId: string;
   userId: string;
+  botToken?: string;
   threadHistory?: string;
 }
 
