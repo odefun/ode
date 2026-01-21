@@ -59,6 +59,7 @@ async function slackApiCall(method: string, body: Record<string, unknown>, token
   const data = await response.json() as { ok: boolean; error?: string; needed?: string };
   if (!data.ok) {
     const detail = data.needed ? ` (needed: ${data.needed})` : "";
+    console.error(`[Slack API] ${method} failed: ${data.error}${detail}`);
     throw new Error(`Slack API error: ${data.error}${detail}`);
   }
 
