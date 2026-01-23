@@ -16,8 +16,9 @@ export interface SlackContext {
   channelId: string;
   threadId: string;
   userId: string;
-  botToken?: string;
   threadHistory?: string;
+  hasCustomSlackTool?: boolean;
+  odeSlackApiUrl?: string;
 }
 
 export interface OpenCodeMessageContext {

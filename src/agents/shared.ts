@@ -35,16 +35,21 @@ export function buildSlackSystemPrompt(slack?: SlackContext): string {
     lines.push(`- Channel: ${slack.channelId}`);
     lines.push(`- Thread: ${slack.threadId}`);
     lines.push(`- User: <@${slack.userId}>`);
-    if (slack.botToken) {
-      lines.push(`- Bot token for Slack tools: ${slack.botToken}`);
-    } else {
-      lines.push("- Bot token for Slack tools: (missing)");
-    }
   }
 
   lines.push("");
-  lines.push("- If you call Slack MCP tools, include bot_token from the Slack context above.");
-  lines.push("- You can use any tool available via mcp or bash, curl");
+  lines.push("SLACK ACTIONS:");
+  if (slack?.hasCustomSlackTool) {
+    lines.push("- Use `ode_action` tool for Slack actions (messages, reactions, thread history, questions, uploads).");
+    lines.push("- Never use Slack MCP tools.");
+  } else {
+    const baseUrl = slack?.odeSlackApiUrl ?? "<ODE_ACTION_API_URL>";
+    lines.push("- Never use Slack MCP tools.");
+    lines.push("- Use bash + curl to call the Ode Slack API.");
+    lines.push(`- Endpoint: ${baseUrl}/action`);
+    lines.push("- Payload: {\"action\":\"post_message\",\"channelId\":\"...\",\"threadId\":\"...\",\"messageId\":\"...\",\"text\":\"...\"}");
+  }
+  lines.push("- You can use any tool available via bash, curl");
   // lines.push("SLACK TOOLS (via MCP) - use these when appropriate:");
   // lines.push("- slack_ask_user: Show buttons to get user input or confirmation");
   // lines.push("- slack_get_thread_messages: Get earlier messages in this thread");
@@ -52,7 +57,7 @@ export function buildSlackSystemPrompt(slack?: SlackContext): string {
   // lines.push("- slack_get_user_info: Look up info about a Slack user");
   lines.push("");
   lines.push("IMPORTANT: Your text output is automatically posted to Slack.");
-  lines.push("- If you use slack_ask_user, do NOT also output text - the buttons are enough.");
+  lines.push("- If you send an ask_user Slack action, do NOT also output text - the buttons are enough.");
   lines.push("- Only output text OR use a messaging tool, never both.");
   lines.push("");
   lines.push("FORMATTING:");

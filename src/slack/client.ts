@@ -1,6 +1,7 @@
 import { App, type AllMiddlewareArgs } from "@slack/bolt";
 import { WebClient } from "@slack/web-api";
 import type { QuestionInfo } from "@opencode-ai/sdk/v2";
+import { join } from "path";
 import { loadEnv, getTargetChannels } from "../config";
 import { markdownToSlack, splitForSlack } from "./formatter";
 import {
@@ -219,10 +220,40 @@ function resolveChannelBotToken(channelId: string): string | undefined {
   return channelBotTokenMap.get(channelId);
 }
 
+export function getChannelBotToken(channelId: string): string | undefined {
+  return resolveChannelBotToken(channelId);
+}
+
 function registerChannelBotToken(channelId: string, botToken: string | undefined): void {
   if (!botToken) return;
   if (channelBotTokenMap.has(channelId)) return;
   channelBotTokenMap.set(channelId, botToken);
+}
+
+function getOdeSlackApiUrl(): string | undefined {
+  const env = loadEnv();
+  const explicitUrl = env.ODE_ACTION_API_URL?.trim() || env.ODE_SLACK_API_URL?.trim();
+  if (explicitUrl) return explicitUrl;
+  const port = env.ODE_ACTION_API_PORT ?? env.ODE_SLACK_API_PORT;
+  if (!port) return undefined;
+  return `http://127.0.0.1:${port}`;
+}
+
+async function hasOdeSlackTool(workingPath: string): Promise<boolean> {
+  const basePath = join(workingPath, ".opencode", "tools");
+  const candidates = [
+    "ode_action.ts",
+    "ode_action.js",
+    "ode_action.mjs",
+    "ode_action.cjs",
+  ];
+
+  for (const candidate of candidates) {
+    const file = Bun.file(join(basePath, candidate));
+    if (await file.exists()) return true;
+  }
+
+  return false;
 }
 
 function truncateToken(token: string): string {
@@ -1255,8 +1286,9 @@ async function handleUserMessageInternal(
       channelId,
       threadId,
       userId: threadOwnerUserId,
-      botToken: resolveChannelBotToken(channelId),
       threadHistory: threadHistory || undefined,
+      hasCustomSlackTool: await hasOdeSlackTool(cwd),
+      odeSlackApiUrl: getOdeSlackApiUrl(),
     },
   };
 
@@ -1559,7 +1591,8 @@ export async function handleButtonSelection(
         channelId,
         threadId,
         userId: threadOwnerUserId,
-        botToken: resolveChannelBotToken(channelId),
+        hasCustomSlackTool: await hasOdeSlackTool(cwd),
+        odeSlackApiUrl: getOdeSlackApiUrl(),
       },
     };
 
