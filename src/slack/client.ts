@@ -144,7 +144,7 @@ async function processGlobalUpdateQueue(): Promise<void> {
         ? formattedText.slice(0, 3900) + "\n\n_(truncated)_"
         : formattedText;
 
-      const botToken = resolveChannelBotToken(item.channelId);
+      const botToken = getChannelBotToken(item.channelId);
       if (!botToken) {
         log.warn("No Slack bot token available for message update", { channelId: item.channelId });
       }
@@ -216,12 +216,8 @@ function resolveWorkspaceAuth(
   return undefined;
 }
 
-function resolveChannelBotToken(channelId: string): string | undefined {
-  return channelBotTokenMap.get(channelId);
-}
-
 export function getChannelBotToken(channelId: string): string | undefined {
-  return resolveChannelBotToken(channelId);
+  return channelBotTokenMap.get(channelId);
 }
 
 function registerChannelBotToken(channelId: string, botToken: string | undefined): void {
@@ -329,7 +325,7 @@ export async function sendMessage(
   const formattedText = asMarkdown ? markdownToSlack(text) : text;
   const chunks = splitForSlack(formattedText);
   const workspace = channelWorkspaceMap.get(channelId) || "unknown";
-  const botToken = resolveChannelBotToken(channelId);
+  const botToken = getChannelBotToken(channelId);
 
   if (!botToken) {
     log.warn("No Slack bot token available for channel", { channelId });
@@ -363,7 +359,7 @@ export async function deleteMessage(
 ): Promise<void> {
   try {
     const slackApp = getApp();
-    const botToken = resolveChannelBotToken(channelId);
+    const botToken = getChannelBotToken(channelId);
     if (!botToken) {
       log.warn("No Slack bot token available for message delete", { channelId });
     }
