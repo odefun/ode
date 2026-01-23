@@ -768,7 +768,7 @@ export function setupInteractiveHandlers(): void {
     });
   });
 
-  // Handle user choice button clicks (from slack_ask_user MCP tool)
+  // Handle user choice button clicks (from Ode ask_user actions)
   slackApp.action(/^user_choice_\d+$/, async ({ ack, body, client }) => {
     await ack();
 

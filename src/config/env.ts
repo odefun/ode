@@ -36,6 +36,10 @@ const envSchema = z.object({
   // OpenCode diagnostics
   OPENCODE_EVENT_DUMP: z.coerce.boolean().default(false),
 
+  // Ode Action API (Slack + future IM actions)
+  ODE_ACTION_API_URL: z.string().default("http://127.0.0.1:3030"),
+  ODE_ACTION_API_TOKEN: z.string().optional(),
+
   SUPABASE_URL: z.string().default(''),
   SUPABASE_SECRET_KEY: z.string().default(''),
 });

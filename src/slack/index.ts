@@ -9,6 +9,8 @@ export {
   type MessageContext,
 } from "./client";
 
+export { startSlackApiServer, stopSlackApiServer } from "./api";
+
 export { setupSlashCommands, setupInteractiveHandlers } from "./commands";
 
 export { startOAuthFlow, stopOAuthServer, processOAuthCallback } from "./oauth";

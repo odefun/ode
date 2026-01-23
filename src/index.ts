@@ -3,6 +3,8 @@ import {
   setupMessageHandlers,
   setupSlashCommands,
   setupInteractiveHandlers,
+  startSlackApiServer,
+  stopSlackApiServer,
   stopOAuthServer,
   recoverPendingRequests,
   initializeWorkspaceAuth,
@@ -36,12 +38,15 @@ async function main(): Promise<void> {
   setupInteractiveHandlers();
   log.info("Interactive handlers registered");
 
+  startSlackApiServer();
+
   // Handle shutdown gracefully
   const shutdown = async (signal: string) => {
     log.info("Shutting down...", { signal });
 
     try {
       stopOAuthServer();
+      stopSlackApiServer();
       await stopServer();
       await app.stop();
       log.info("Cleanup complete");

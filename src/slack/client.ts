@@ -1,6 +1,7 @@
 import { App, type AllMiddlewareArgs } from "@slack/bolt";
 import { WebClient } from "@slack/web-api";
 import type { QuestionInfo } from "@opencode-ai/sdk/v2";
+import { join } from "path";
 import { loadEnv, getTargetChannels } from "../config";
 import { markdownToSlack, splitForSlack } from "./formatter";
 import {
@@ -143,7 +144,7 @@ async function processGlobalUpdateQueue(): Promise<void> {
         ? formattedText.slice(0, 3900) + "\n\n_(truncated)_"
         : formattedText;
 
-      const botToken = resolveChannelBotToken(item.channelId);
+      const botToken = getChannelBotToken(item.channelId);
       if (!botToken) {
         log.warn("No Slack bot token available for message update", { channelId: item.channelId });
       }
@@ -215,7 +216,7 @@ function resolveWorkspaceAuth(
   return undefined;
 }
 
-function resolveChannelBotToken(channelId: string): string | undefined {
+export function getChannelBotToken(channelId: string): string | undefined {
   return channelBotTokenMap.get(channelId);
 }
 
@@ -223,6 +224,29 @@ function registerChannelBotToken(channelId: string, botToken: string | undefined
   if (!botToken) return;
   if (channelBotTokenMap.has(channelId)) return;
   channelBotTokenMap.set(channelId, botToken);
+}
+
+function getOdeSlackApiUrl(): string | undefined {
+  const env = loadEnv();
+  const explicitUrl = env.ODE_ACTION_API_URL?.trim();
+  return explicitUrl || undefined;
+}
+
+async function hasOdeSlackTool(workingPath: string): Promise<boolean> {
+  const basePath = join(workingPath, ".opencode", "tools");
+  const candidates = [
+    "ode_action.ts",
+    "ode_action.js",
+    "ode_action.mjs",
+    "ode_action.cjs",
+  ];
+
+  for (const candidate of candidates) {
+    const file = Bun.file(join(basePath, candidate));
+    if (await file.exists()) return true;
+  }
+
+  return false;
 }
 
 function truncateToken(token: string): string {
@@ -301,7 +325,7 @@ export async function sendMessage(
   const formattedText = asMarkdown ? markdownToSlack(text) : text;
   const chunks = splitForSlack(formattedText);
   const workspace = channelWorkspaceMap.get(channelId) || "unknown";
-  const botToken = resolveChannelBotToken(channelId);
+  const botToken = getChannelBotToken(channelId);
 
   if (!botToken) {
     log.warn("No Slack bot token available for channel", { channelId });
@@ -335,7 +359,7 @@ export async function deleteMessage(
 ): Promise<void> {
   try {
     const slackApp = getApp();
-    const botToken = resolveChannelBotToken(channelId);
+    const botToken = getChannelBotToken(channelId);
     if (!botToken) {
       log.warn("No Slack bot token available for message delete", { channelId });
     }
@@ -1113,7 +1137,7 @@ async function runOpenCodeRequest(
     completeActiveRequest(channelId, threadId);
 
     if (responses.length === 0) {
-      log.warn("No text responses from model - may have used MCP tools");
+      log.warn("No text responses from model - tool-only response");
     }
 
     return responses;
@@ -1255,8 +1279,9 @@ async function handleUserMessageInternal(
       channelId,
       threadId,
       userId: threadOwnerUserId,
-      botToken: resolveChannelBotToken(channelId),
       threadHistory: threadHistory || undefined,
+      hasCustomSlackTool: await hasOdeSlackTool(cwd),
+      odeSlackApiUrl: getOdeSlackApiUrl(),
     },
   };
 
@@ -1559,7 +1584,8 @@ export async function handleButtonSelection(
         channelId,
         threadId,
         userId: threadOwnerUserId,
-        botToken: resolveChannelBotToken(channelId),
+        hasCustomSlackTool: await hasOdeSlackTool(cwd),
+        odeSlackApiUrl: getOdeSlackApiUrl(),
       },
     };
 
