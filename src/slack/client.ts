@@ -232,11 +232,8 @@ function registerChannelBotToken(channelId: string, botToken: string | undefined
 
 function getOdeSlackApiUrl(): string | undefined {
   const env = loadEnv();
-  const explicitUrl = env.ODE_ACTION_API_URL?.trim() || env.ODE_SLACK_API_URL?.trim();
-  if (explicitUrl) return explicitUrl;
-  const port = env.ODE_ACTION_API_PORT ?? env.ODE_SLACK_API_PORT;
-  if (!port) return undefined;
-  return `http://127.0.0.1:${port}`;
+  const explicitUrl = env.ODE_ACTION_API_URL?.trim();
+  return explicitUrl || undefined;
 }
 
 async function hasOdeSlackTool(workingPath: string): Promise<boolean> {

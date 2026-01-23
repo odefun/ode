@@ -45,7 +45,7 @@ function jsonResponse(status: number, payload: SlackApiResponse): Response {
 
 function isAuthorized(request: Request): boolean {
   const env = loadEnv();
-  const token = env.ODE_ACTION_API_TOKEN ?? env.ODE_SLACK_API_TOKEN;
+  const token = env.ODE_ACTION_API_TOKEN;
   if (!token) return true;
   const authHeader = request.headers.get("authorization");
   return authHeader === `Bearer ${token}`;
@@ -247,12 +247,16 @@ async function handleSlackAction(payload: SlackActionRequest): Promise<unknown> 
 export function startSlackApiServer(): void {
   if (slackApiServer) return;
   const env = loadEnv();
-  const host = env.ODE_ACTION_API_HOST ?? env.ODE_SLACK_API_HOST;
-  const port = env.ODE_ACTION_API_PORT ?? env.ODE_SLACK_API_PORT;
+  const url = new URL(env.ODE_ACTION_API_URL);
+  const port = url.port
+    ? Number(url.port)
+    : url.protocol === "https:"
+      ? 443
+      : 80;
 
   slackApiServer = Bun.serve({
     port,
-    hostname: host,
+    hostname: url.hostname,
     fetch: async (request) => {
       const url = new URL(request.url);
       if (!isAuthorized(request)) {
@@ -286,7 +290,7 @@ export function startSlackApiServer(): void {
   });
 
   log.info("Slack API server started", {
-    host,
+    host: url.hostname,
     port,
   });
 }

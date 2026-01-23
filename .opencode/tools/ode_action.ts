@@ -24,9 +24,8 @@ export default tool({
   async execute(args) {
     const baseUrl =
       process.env.ODE_ACTION_API_URL ||
-      process.env.ODE_SLACK_API_URL ||
       "http://127.0.0.1:3030";
-    const token = process.env.ODE_ACTION_API_TOKEN || process.env.ODE_SLACK_API_TOKEN;
+    const token = process.env.ODE_ACTION_API_TOKEN;
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
     };

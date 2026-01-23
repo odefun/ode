@@ -36,16 +36,8 @@ const envSchema = z.object({
   // OpenCode diagnostics
   OPENCODE_EVENT_DUMP: z.coerce.boolean().default(false),
 
-  // Ode Slack API
-  ODE_SLACK_API_HOST: z.string().default("0.0.0.0"),
-  ODE_SLACK_API_PORT: z.coerce.number().default(3030),
-  ODE_SLACK_API_URL: z.string().optional(),
-  ODE_SLACK_API_TOKEN: z.string().optional(),
-
-  // Ode Action API (preferred, falls back to Slack API settings)
-  ODE_ACTION_API_HOST: z.string().optional(),
-  ODE_ACTION_API_PORT: z.coerce.number().optional(),
-  ODE_ACTION_API_URL: z.string().optional(),
+  // Ode Action API (Slack + future IM actions)
+  ODE_ACTION_API_URL: z.string().default("http://127.0.0.1:3030"),
   ODE_ACTION_API_TOKEN: z.string().optional(),
 
   SUPABASE_URL: z.string().default(''),
