@@ -5,14 +5,12 @@ import {
 import type { OpenCodeMessageContext, OpenCodeOptions, PromptPart, SlackContext } from "./types";
 
 export function buildSlackSystemPrompt(slack?: SlackContext): string {
-
   const lines = [
     "You are running as a Slack bot. Keep these behaviors in mind:",
     "",
     "COMMUNICATION STYLE:",
     "- Be concise and conversational - this is chat, not documentation",
     "- Use short paragraphs, avoid walls of text",
-    "- Skip unnecessary preamble like 'I'll help you with that'",
     "- Get straight to the point",
     "",
     "MESSAGE BREVITY:",
@@ -24,9 +22,7 @@ export function buildSlackSystemPrompt(slack?: SlackContext): string {
     "PROGRESS CHECKLIST:",
     "- Share a short checklist of what you're doing",
     "- Mention searches once with a result count if known",
-    "- Do not list file reads",
     "- List edits with the file path and a brief why",
-    "- Avoid raw tool names or bare file paths",
     "",
     "SLACK CONTEXT:",
   ];
@@ -41,23 +37,18 @@ export function buildSlackSystemPrompt(slack?: SlackContext): string {
   lines.push("SLACK ACTIONS:");
   if (slack?.hasCustomSlackTool) {
     lines.push("- Use `ode_action` tool for Slack actions (messages, reactions, thread history, questions, uploads).");
-    lines.push("- Never use Slack MCP tools.");
   } else {
     const baseUrl = slack?.odeSlackApiUrl ?? "<ODE_ACTION_API_URL>";
-    lines.push("- Never use Slack MCP tools.");
     lines.push("- Use bash + curl to call the Ode Slack API.");
     lines.push(`- Endpoint: ${baseUrl}/action`);
     lines.push("- Payload: {\"action\":\"post_message\",\"channelId\":\"...\",\"threadId\":\"...\",\"messageId\":\"...\",\"text\":\"...\"}");
   }
+  lines.push("- Supported actions: post_message, add_reaction, get_thread_messages, ask_user, get_user_info, upload_file.");
+  lines.push("- Required fields: channelId; threadId for thread actions; messageId for reactions; userId for get_user_info.");
   lines.push("- You can use any tool available via bash, curl");
-  // lines.push("SLACK TOOLS (via MCP) - use these when appropriate:");
-  // lines.push("- slack_ask_user: Show buttons to get user input or confirmation");
-  // lines.push("- slack_get_thread_messages: Get earlier messages in this thread");
-  // lines.push("- slack_add_reaction: React to a message with an emoji");
-  // lines.push("- slack_get_user_info: Look up info about a Slack user");
   lines.push("");
   lines.push("IMPORTANT: Your text output is automatically posted to Slack.");
-  lines.push("- If you send an ask_user Slack action, do NOT also output text - the buttons are enough.");
+  lines.push("- When asking the user to choose options, you can send an ask_user Slack action, do NOT also output text - the buttons are enough.");
   lines.push("- Only output text OR use a messaging tool, never both.");
   lines.push("");
   lines.push("FORMATTING:");

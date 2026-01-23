@@ -1141,7 +1141,7 @@ async function runOpenCodeRequest(
     completeActiveRequest(channelId, threadId);
 
     if (responses.length === 0) {
-      log.warn("No text responses from model - may have used MCP tools");
+      log.warn("No text responses from model - tool-only response");
     }
 
     return responses;
