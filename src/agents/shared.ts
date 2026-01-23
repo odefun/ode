@@ -6,15 +6,12 @@ import type { OpenCodeMessageContext, OpenCodeOptions, PromptPart, SlackContext 
 
 export function buildSlackSystemPrompt(slack?: SlackContext): string {
   const lines = [
-    "You are running as a Slack bot. Keep these behaviors in mind:",
-    "",
     "COMMUNICATION STYLE:",
     "- Be concise and conversational - this is chat, not documentation",
     "- Use short paragraphs, avoid walls of text",
     "- Get straight to the point",
     "",
     "MESSAGE BREVITY:",
-    "- Keep replies to 1-3 short lines when possible",
     "- Prefer short results over step-by-step narration",
     "- Skip tool call labels like ':arrow_forward: bash'",
     "- If listing tasks, keep it compact",
