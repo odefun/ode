@@ -58,6 +58,25 @@ function requireString(value: unknown, label: string): string {
   return value;
 }
 
+function normalizeOptionLabel(option: unknown): string {
+  if (typeof option === "string") return option;
+  if (option && typeof option === "object") {
+    const record = option as Record<string, unknown>;
+    if (typeof record.label === "string") return record.label;
+    if (typeof record.text === "string") return record.text;
+    if (typeof record.value === "string") return record.value;
+  }
+  return String(option ?? "");
+}
+
+function normalizeSlackUserId(userId: string): string {
+  const trimmed = userId.trim();
+  if (trimmed.startsWith("<@") && trimmed.endsWith(">")) {
+    return trimmed.slice(2, -1);
+  }
+  return trimmed.startsWith("@") ? trimmed.slice(1) : trimmed;
+}
+
 function requireChannelToken(channelId: string): string {
   const token = getChannelBotToken(channelId);
   if (!token) {
@@ -163,8 +182,10 @@ async function handleSlackAction(payload: SlackActionRequest): Promise<unknown> 
     case "ask_user": {
       const threadId = requireString(payload.threadId, "threadId");
       const question = requireString(payload.question, "question");
-      const options = payload.options;
-      if (!Array.isArray(options) || options.length < 2 || options.length > 5) {
+      const options = Array.isArray(payload.options)
+        ? payload.options.map(normalizeOptionLabel).filter((opt) => opt.trim().length > 0)
+        : [];
+      if (options.length < 2 || options.length > 5) {
         throw new Error("options must have 2-5 items");
       }
 
@@ -209,7 +230,7 @@ async function handleSlackAction(payload: SlackActionRequest): Promise<unknown> 
     }
 
     case "get_user_info": {
-      const userId = requireString(payload.userId, "userId");
+      const userId = normalizeSlackUserId(requireString(payload.userId, "userId"));
       const data = await client.users.info({ user: userId, token });
       return data;
     }
