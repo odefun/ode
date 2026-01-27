@@ -967,6 +967,41 @@ async function startEventStreamWatcher(
       }
 
       onUpdate();
+    } else if (event.type === "message.updated") {
+      const info = event.properties?.info as { role?: string; sessionID?: string; agent?: unknown; mode?: unknown } | undefined;
+      if (!info || info.role !== "assistant" || info.sessionID !== request.sessionId) {
+        return;
+      }
+
+      const agent =
+        typeof info.agent === "string"
+          ? info.agent
+          : typeof info.mode === "string"
+            ? info.mode
+            : undefined;
+
+      if (agent === "plan") {
+        request.currentStatus = "Planning";
+
+        const session = loadSession(request.channelId, request.threadId);
+        if (session) {
+          session.plan = session.plan ?? { status: "planning", todos: [] };
+          if (session.plan.status !== "planning") {
+            session.plan.status = "planning";
+            saveSession(session);
+          }
+        }
+      } else if (agent) {
+        request.currentStatus = "Building";
+
+        const session = loadSession(request.channelId, request.threadId);
+        if (session?.plan && (session.plan.status === "planning" || session.plan.status === "awaiting_input")) {
+          session.plan.status = "building";
+          saveSession(session);
+        }
+      }
+
+      onUpdate();
     } else if (event.type === "todo.updated") {
       const todos = event.properties?.todos || [];
       request.todos = todos.map((t: any) => ({
