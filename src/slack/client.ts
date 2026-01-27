@@ -797,8 +797,8 @@ function normalizeQuestions(questions?: QuestionInfo[]): NormalizedQuestion[] {
       const prompt = typeof question.question === "string" ? question.question.trim() : "";
       const options = Array.isArray(question.options)
         ? question.options
-            .map((option) => (typeof option?.label === "string" ? option.label : ""))
-            .filter((label) => label.length > 0)
+          .map((option) => (typeof option?.label === "string" ? option.label : ""))
+          .filter((label) => label.length > 0)
         : undefined;
       return {
         question: prompt,
@@ -1592,7 +1592,9 @@ export async function handleButtonSelection(
 
   const threadOwnerUserId = session?.threadOwnerUserId ?? userId;
 
-  const agent = session?.plan?.status === "planning" || session?.plan?.status === "awaiting_input"
+  console.log('---- session?.plan?.status ----')
+  console.log(session?.plan?.status)
+  const agent = session?.plan?.status === "planning"
     ? "plan"
     : session?.plan?.status === "building"
       ? "build"
