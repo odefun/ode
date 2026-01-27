@@ -1302,7 +1302,8 @@ async function handleUserMessageInternal(
   saveSession(session);
 
   const awaitingInput = session.plan?.status === "awaiting_input";
-  const usePlanAgent = awaitingInput || /plan/i.test(text);
+  const forceBuildAgent = /build/i.test(text);
+  const usePlanAgent = !forceBuildAgent && (awaitingInput || /plan/i.test(text));
 
   const threadHistory = created
     ? await fetchThreadHistory(client, channelId, threadId, messageId)
@@ -1411,7 +1412,7 @@ async function handleUserMessageInternal(
     return;
   }
 
-  session.plan = { status: "building", todos: [] };
+  session.plan = { status: "building", todos: session.plan?.todos ?? [] };
   saveSession(session);
 
   const buildResponses = await runOpenCodeRequest(
@@ -1592,8 +1593,6 @@ export async function handleButtonSelection(
 
   const threadOwnerUserId = session?.threadOwnerUserId ?? userId;
 
-  console.log('---- session?.plan?.status ----')
-  console.log(session?.plan?.status)
   const agent = session?.plan?.status === "planning"
     ? "plan"
     : session?.plan?.status === "building"
