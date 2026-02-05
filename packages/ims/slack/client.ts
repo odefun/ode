@@ -121,11 +121,8 @@ type SlackThreadMessage = {
 };
 
 // Throttling state
-const lastUpdateTime = new Map<string, number>();
-const pendingUpdates = new Map<string, boolean>();
 const liveEventHistory = new Map<string, SessionEvent[]>();
 const liveParsedState = new Map<string, SessionMessageState>();
-const UPDATE_THROTTLE_MS = 500;
 
 // Global rate limiter for chat.update calls across all messages
 // Slack's rate limit is roughly 1 request per second for chat.update
@@ -524,21 +521,8 @@ async function updateMessageThrottled(
   channelId: string,
   messageTs: string,
   text: string,
-  asMarkdown = true,
-  force = false
+  asMarkdown = true
 ): Promise<void> {
-  const key = `${channelId}:${messageTs}`;
-  const now = Date.now();
-  const lastUpdate = lastUpdateTime.get(key) || 0;
-
-  if (!force && now - lastUpdate < UPDATE_THROTTLE_MS) {
-    pendingUpdates.set(key, true);
-    return;
-  }
-
-  lastUpdateTime.set(key, now);
-  pendingUpdates.delete(key);
-
   // Remove any existing queued updates for this message (only keep latest)
   // Use in-place splice instead of filter to avoid reassigning the array,
   // which would break the while loop in processGlobalUpdateQueue
@@ -564,11 +548,7 @@ async function flushPendingUpdate(
   messageTs: string,
   text: string
 ): Promise<void> {
-  const key = `${channelId}:${messageTs}`;
-  if (pendingUpdates.has(key)) {
-    lastUpdateTime.delete(key);
-    await updateMessageThrottled(channelId, messageTs, text);
-  }
+  await updateMessageThrottled(channelId, messageTs, text);
 }
 
 function formatElapsedTime(startedAt: number): string {
@@ -1222,7 +1202,7 @@ async function runOpenCodeRequest(
     if (result.type === "stop") {
       const fallbackText = request.currentText?.trim();
       const finalText = fallbackText || "_Done_";
-      await updateMessageThrottled(channelId, statusTs, finalText, true, true);
+      await updateMessageThrottled(channelId, statusTs, finalText, true);
       void promptPromise.catch((err) => {
         log.debug("OpenCode prompt rejected after stop", { error: String(err) });
       });
@@ -1236,7 +1216,7 @@ async function runOpenCodeRequest(
     }
 
     const finalText = buildFinalResponseText(result.responses) ?? "_Done_";
-    await updateMessageThrottled(channelId, statusTs, finalText, true, true);
+    await updateMessageThrottled(channelId, statusTs, finalText, true);
 
     return result.responses;
   } catch (err) {
@@ -1353,7 +1333,8 @@ async function handleUserMessageInternal(
   }
 
   try {
-    const worktree = await ensureSessionWorktree({ cwd, sessionId, env: sessionEnv });
+    const worktreeId = `ode_${threadId}`;
+    const worktree = await ensureSessionWorktree({ cwd, worktreeId, env: sessionEnv });
     if (worktree.skipped && worktree.message) {
       await sendMessage(channelId, threadId, worktree.message, false);
     }
@@ -1631,7 +1612,7 @@ export async function handleButtonSelection(
     if (result.type === "stop") {
       const fallbackText = request.currentText?.trim();
       const finalText = fallbackText || "_Done_";
-      await updateMessageThrottled(channelId, statusTs, finalText, true, true);
+      await updateMessageThrottled(channelId, statusTs, finalText, true);
       completeActiveRequest(channelId, threadId);
       void promptPromise.catch((err) => {
         log.debug("OpenCode prompt rejected after stop", { error: String(err) });
@@ -1640,7 +1621,7 @@ export async function handleButtonSelection(
     }
 
     const finalText = buildFinalResponseText(result.responses) ?? "_Done_";
-    await updateMessageThrottled(channelId, statusTs, finalText, true, true);
+    await updateMessageThrottled(channelId, statusTs, finalText, true);
 
     completeActiveRequest(channelId, threadId);
 

@@ -110,10 +110,10 @@ function ensureWorktreeGitignore(repoRoot: string): void {
 
 export async function ensureSessionWorktree(params: {
   cwd: string;
-  sessionId: string;
+  worktreeId: string;
   env?: Record<string, string>;
 }): Promise<WorktreeResult> {
-  const { cwd, sessionId, env } = params;
+  const { cwd, worktreeId, env } = params;
   const repoRoot = resolveRepoRoot(cwd, env);
   if (!repoRoot) {
     return { worktreePath: cwd, repoRoot: null, created: false, reused: false, skipped: true };
@@ -122,7 +122,7 @@ export async function ensureSessionWorktree(params: {
   ensureWorktreeGitignore(repoRoot);
 
   const worktreeDir = join(repoRoot, ".worktree");
-  const worktreePath = join(worktreeDir, sessionId);
+  const worktreePath = join(worktreeDir, worktreeId);
   const existingWorktrees = listWorktrees(repoRoot, env);
   const hasRegistered = existingWorktrees.includes(worktreePath);
   const pathExists = existsSync(worktreePath);
@@ -153,11 +153,11 @@ export async function ensureSessionWorktree(params: {
   log.info("Pulling latest main before creating worktree", { repoRoot });
   runGit(["pull", "origin", "main"], repoRoot, env);
 
-  log.info("Creating worktree for session", { worktreePath, sessionId });
-  if (localBranchExists(repoRoot, sessionId, env)) {
-    runGit(["worktree", "add", worktreePath, sessionId], repoRoot, env);
+  log.info("Creating worktree for session", { worktreePath, worktreeId });
+  if (localBranchExists(repoRoot, worktreeId, env)) {
+    runGit(["worktree", "add", worktreePath, worktreeId], repoRoot, env);
   } else {
-    runGit(["worktree", "add", worktreePath, "-b", sessionId, "main"], repoRoot, env);
+    runGit(["worktree", "add", worktreePath, "-b", worktreeId, "main"], repoRoot, env);
   }
   copyEnvFile(repoRoot, worktreePath);
 
