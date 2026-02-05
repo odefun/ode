@@ -6,6 +6,7 @@ export {
   saveOdeConfig,
   getWorkspaces,
   getDevServers,
+  getUpdateConfig,
   getChannelDetails,
   getChannelModel,
   getChannelDevServerId,
@@ -24,6 +25,7 @@ export {
   type OdeConfig,
   type WorkspaceConfig,
   type DevServerConfig,
+  type UpdateConfig,
   type ChannelDetail,
   type UserConfig,
 } from "./local/ode";

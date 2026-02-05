@@ -38,6 +38,14 @@ const channelDetailSchema = z.object({
   devServerId: z.string().nullable().optional(),
 });
 
+const DEFAULT_UPDATE_INTERVAL_MS = 60 * 60 * 1000;
+const MIN_UPDATE_INTERVAL_MS = 5 * 60 * 1000;
+
+const updateSchema = z.object({
+  autoUpgrade: z.boolean().optional().default(true),
+  checkIntervalMs: z.number().optional().default(DEFAULT_UPDATE_INTERVAL_MS),
+});
+
 const workspaceSchema = z.object({
   id: z.string(),
   name: z.string().optional().default(""),
@@ -55,11 +63,16 @@ const odeConfigSchema = z.object({
   user: userSchema,
   devServers: z.array(devServerSchema),
   workspaces: z.array(workspaceSchema),
+  updates: updateSchema.optional().default({
+    autoUpgrade: true,
+    checkIntervalMs: DEFAULT_UPDATE_INTERVAL_MS,
+  }),
 });
 
 export type ChannelDetail = z.infer<typeof channelDetailSchema>;
 export type WorkspaceConfig = z.infer<typeof workspaceSchema>;
 export type DevServerConfig = z.infer<typeof devServerSchema>;
+export type UpdateConfig = z.infer<typeof updateSchema>;
 export type OdeConfig = z.infer<typeof odeConfigSchema>;
 export type UserConfig = z.infer<typeof userSchema>;
 
@@ -76,6 +89,10 @@ const EMPTY_TEMPLATE: OdeConfig = {
   },
   devServers: [],
   workspaces: [],
+  updates: {
+    autoUpgrade: true,
+    checkIntervalMs: DEFAULT_UPDATE_INTERVAL_MS,
+  },
 };
 
 function ensureConfigDir(): void {
@@ -98,11 +115,21 @@ function normalizeConfig(config: OdeConfig): OdeConfig {
       : frequency === "high"
         ? "aggressive"
         : frequency;
+  const intervalCandidate = config.updates?.checkIntervalMs ?? DEFAULT_UPDATE_INTERVAL_MS;
+  const normalizedInterval =
+    Number.isFinite(intervalCandidate) && intervalCandidate > 0
+      ? Math.max(intervalCandidate, MIN_UPDATE_INTERVAL_MS)
+      : DEFAULT_UPDATE_INTERVAL_MS;
+  const autoUpgrade = config.updates?.autoUpgrade ?? true;
   return {
     ...config,
     user: {
       ...config.user,
       defaultMessageFrequency: normalizedFrequency,
+    },
+    updates: {
+      autoUpgrade,
+      checkIntervalMs: normalizedInterval,
     },
   };
 }
@@ -146,6 +173,10 @@ export function getWorkspaces(): WorkspaceConfig[] {
 
 export function getDevServers(): DevServerConfig[] {
   return loadOdeConfig().devServers;
+}
+
+export function getUpdateConfig(): UpdateConfig {
+  return loadOdeConfig().updates;
 }
 
 export function getSlackAppToken(): string {
