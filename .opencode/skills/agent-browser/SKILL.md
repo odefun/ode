@@ -11,9 +11,10 @@ allowed-tools: Bash(agent-browser:*)
 Every browser automation follows this pattern:
 
 1. **Navigate**: `agent-browser open <url>`
-2. **Snapshot**: `agent-browser snapshot -i` (get element refs like `@e1`, `@e2`)
-3. **Interact**: Use refs to click, fill, select
-4. **Re-snapshot**: After navigation or DOM changes, get fresh refs
+2. **Viewport**: Default to desktop `1200x800`; use mobile preset `390x844` only when requested
+3. **Snapshot**: `agent-browser snapshot -i` (get element refs like `@e1`, `@e2`)
+4. **Interact**: Use refs to click, fill, select
+5. **Re-snapshot**: After navigation or DOM changes, get fresh refs
 
 ```bash
 agent-browser open https://example.com/form
