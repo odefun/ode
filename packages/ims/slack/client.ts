@@ -64,6 +64,7 @@ import {
   type SessionEvent,
   type SessionMessageState,
   log,
+  ensureSessionWorktree,
 } from "@ode/utils";
 import { getSlackActionApiUrl } from "./config";
 import { getAllBotTokens, getProfileBySlackUserId, getSlackAppTokenFromServer } from "@ode/config/db";
@@ -606,10 +607,12 @@ function getStatusMessageKey(request: ActiveRequest): string {
 }
 
 function getRepoRoot(workingPath: string): string {
-  const marker = "/.worktrees/";
-  const matchIndex = workingPath.indexOf(marker);
-  if (matchIndex >= 0) {
-    return workingPath.slice(0, matchIndex);
+  const markers = ["/.worktree/", "/.worktrees/"];
+  for (const marker of markers) {
+    const matchIndex = workingPath.indexOf(marker);
+    if (matchIndex >= 0) {
+      return workingPath.slice(0, matchIndex);
+    }
   }
   return workingPath;
 }
@@ -628,6 +631,7 @@ function trimToolPath(label: string, workingPath: string): string {
   }
 
   trimmed = trimmed.replace(/(^|\/)\.worktrees\/[^/]+\//, "");
+  trimmed = trimmed.replace(/(^|\/)\.worktree\/[^/]+\//, "");
   trimmed = trimmed.replace(/^\//, "");
   return trimmed;
 }
@@ -1348,6 +1352,23 @@ async function handleUserMessageInternal(
     return;
   }
 
+  try {
+    const worktree = await ensureSessionWorktree({ cwd, sessionId, env: sessionEnv });
+    if (!worktree.skipped && worktree.worktreePath !== cwd) {
+      cwd = worktree.worktreePath;
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.error("Failed to prepare worktree", {
+      channelId,
+      threadId,
+      sessionId,
+      error: message,
+    });
+    await sendMessage(channelId, threadId, `Error: Failed to prepare worktree. ${message}`, false);
+    return;
+  }
+
   if (!session) {
     session = {
       sessionId,
@@ -1360,6 +1381,10 @@ async function handleUserMessageInternal(
     };
   } else if (session.sessionId !== sessionId) {
     session.sessionId = sessionId;
+  }
+
+  if (session.workingDirectory !== cwd) {
+    session.workingDirectory = cwd;
   }
 
   if (!session.threadOwnerUserId) {

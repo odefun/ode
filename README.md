@@ -66,6 +66,11 @@ http://127.0.0.1:9293
 2. Mention the bot or reply in an active thread
 3. The bot will process your message with OpenCode and reply
 
+## Worktrees
+
+- Each session uses a dedicated git worktree at `<repoRoot>/.worktree/<sessionId>`
+- On first use, Ode pulls `origin/main`, creates the worktree, and copies `.env` if it exists
+
 ## Local Settings UI
 
 The local settings UI exposes `http://<ODE_WEB_HOST>:<ODE_WEB_PORT>/local-setting` and lets you edit:

@@ -9,6 +9,7 @@ packages/web-ui/build/
 packages/web-ui/.env
 dist/
 .env
+.worktree/
 data/
 *.log
 .DS_Store

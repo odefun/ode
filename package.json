@@ -1,6 +1,6 @@
 {
   "name": "ode",
-  "version": "0.0.18",
+  "version": "0.0.19",
   "description": "Ode - OpenCode chat controller for Slack",
   "module": "packages/core/index.ts",
   "type": "module",

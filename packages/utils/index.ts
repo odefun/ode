@@ -7,3 +7,4 @@ export {
   type SessionTool,
   type SessionTodo,
 } from "./session-inspector";
+export { ensureSessionWorktree, resolveRepoRoot } from "./worktree";
