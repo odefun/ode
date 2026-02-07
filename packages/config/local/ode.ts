@@ -53,7 +53,11 @@ const channelDetailSchema = z.object({
   id: z.string(),
   name: z.string(),
   agentProvider: z.preprocess(
-    (value) => (value === "claude" ? "claudecode" : value),
+    (value) => {
+      if (value === "claude") return "claudecode";
+      if (value === "openai") return "codex";
+      return value;
+    },
     agentProviderSchema.optional().default("opencode")
   ),
   model: z.string().optional().default(""),

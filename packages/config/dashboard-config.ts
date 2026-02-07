@@ -96,7 +96,11 @@ const asStatus = (value: unknown): DashboardConfig["workspaces"][number]["status
 const asAgentProvider = (
   value: unknown
 ): DashboardConfig["workspaces"][number]["channelDetails"][number]["agentProvider"] =>
-  value === "claudecode" ? "claudecode" : value === "codex" ? "codex" : "opencode";
+  value === "claudecode"
+    ? "claudecode"
+    : value === "codex" || value === "openai"
+      ? "codex"
+      : "opencode";
 
 const sanitizeChannelDetail = (
   channel: unknown
