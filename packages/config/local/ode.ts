@@ -7,6 +7,7 @@ import { normalizeCwd } from "../paths";
 const existsSync = fs.existsSync;
 const mkdirSync = fs.mkdirSync;
 const readFileSync = fs.readFileSync;
+const statSync = fs.statSync;
 const writeFileSync = fs.writeFileSync;
 const join = typeof path.join === "function" ? path.join : (...parts: string[]) => parts.join("/");
 const homedir = typeof os.homedir === "function" ? os.homedir : () => "";
@@ -53,11 +54,7 @@ const channelDetailSchema = z.object({
   id: z.string(),
   name: z.string(),
   agentProvider: z.preprocess(
-    (value) => {
-      if (value === "claude") return "claudecode";
-      if (value === "openai") return "codex";
-      return value;
-    },
+    (value) => (value === "claude" ? "claudecode" : value),
     agentProviderSchema.optional().default("opencode")
   ),
   model: z.string().optional().default(""),
@@ -115,6 +112,15 @@ export type OdeConfig = z.infer<typeof odeConfigSchema>;
 export type UserConfig = z.infer<typeof userSchema>;
 
 let cachedConfig: OdeConfig | null = null;
+let cachedConfigMtimeMs: number | null = null;
+
+function getConfigMtimeMs(): number | null {
+  try {
+    return statSync(ODE_CONFIG_FILE).mtimeMs;
+  } catch {
+    return null;
+  }
+}
 
 const EMPTY_TEMPLATE: OdeConfig = {
   user: {
@@ -196,12 +202,21 @@ function normalizeConfig(config: OdeConfig): OdeConfig {
 }
 
 export function loadOdeConfig(): OdeConfig {
-  if (cachedConfig) return cachedConfig;
-
   ensureConfigFile();
+
+  const configMtimeMs = getConfigMtimeMs();
+  if (
+    cachedConfig
+    && cachedConfigMtimeMs !== null
+    && configMtimeMs !== null
+    && cachedConfigMtimeMs === configMtimeMs
+  ) {
+    return cachedConfig;
+  }
 
   if (!existsSync(ODE_CONFIG_FILE)) {
     cachedConfig = normalizeConfig(EMPTY_TEMPLATE);
+    cachedConfigMtimeMs = null;
     return cachedConfig;
   }
 
@@ -233,15 +248,18 @@ export function loadOdeConfig(): OdeConfig {
         },
       },
     });
+    cachedConfigMtimeMs = configMtimeMs;
     return cachedConfig;
   } catch {
     cachedConfig = normalizeConfig(EMPTY_TEMPLATE);
+    cachedConfigMtimeMs = configMtimeMs;
     return cachedConfig;
   }
 }
 
 export function invalidateOdeConfigCache(): void {
   cachedConfig = null;
+  cachedConfigMtimeMs = null;
 }
 
 export function saveOdeConfig(config: OdeConfig): void {
@@ -267,6 +285,7 @@ export function saveOdeConfig(config: OdeConfig): void {
   }
 
   writeFileSync(ODE_CONFIG_FILE, JSON.stringify(persisted, null, 2));
+  cachedConfigMtimeMs = getConfigMtimeMs();
 }
 
 export function getWorkspaces(): WorkspaceConfig[] {
