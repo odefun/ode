@@ -352,37 +352,6 @@ async function postGitHubLauncher(
   });
 }
 
-function syncWorkspaceInBackground(workspace: WorkspaceAuth, channelId: string): void {
-  if (backgroundWorkspaceSyncInFlight.has(workspace.workspaceId)) {
-    log.debug("Skipping Slack workspace sync; already in flight", {
-      workspaceId: workspace.workspaceId,
-      channelId,
-    });
-    return;
-  }
-
-  backgroundWorkspaceSyncInFlight.add(workspace.workspaceId);
-  void syncSlackWorkspace(workspace.workspaceId)
-    .then((updatedWorkspace) => {
-      invalidateOdeConfigCache();
-      log.info("Slack workspace synced after channel event", {
-        workspaceId: workspace.workspaceId,
-        workspaceName: updatedWorkspace.name,
-        channelId,
-      });
-    })
-    .catch((error) => {
-      log.warn("Slack workspace sync failed after channel event", {
-        workspaceId: workspace.workspaceId,
-        channelId,
-        error: String(error),
-      });
-    })
-    .finally(() => {
-      backgroundWorkspaceSyncInFlight.delete(workspace.workspaceId);
-    });
-}
-
 async function syncWorkspaceAfterMention(
   channelId: string,
   workspace: { workspaceId?: string; workspaceName?: string } | undefined
@@ -650,37 +619,6 @@ export function setupMessageHandlers(): void {
       handleIncomingMessage: (context, text) => coreRuntime.handleIncomingMessage(context, text),
     });
 
-    slackApp.event("member_joined_channel", async ({ event, context }: any) => {
-      const channelId = event?.channel as string | undefined;
-      const memberId = event?.user as string | undefined;
-      if (!channelId || !memberId) return;
-
-      const workspaceAuth = resolveWorkspaceAuth(
-        event?.team as string | undefined,
-        (event?.enterprise_id as string | undefined) ?? (context?.enterpriseId as string | undefined)
-      );
-      if (!workspaceAuth || memberId !== workspaceAuth.botUserId) return;
-
-      channelWorkspaceAuthMap.set(channelId, workspaceAuth);
-      if (workspaceAuth.workspaceName) {
-        channelWorkspaceMap.set(channelId, workspaceAuth.workspaceName);
-      }
-
-      if (!workspaceAuth.workspaceId) {
-        log.warn("Bot added to channel but workspace id is missing; skipping sync", {
-          workspaceName: workspaceAuth.workspaceName,
-          channelId,
-        });
-        return;
-      }
-
-      log.info("Bot added to channel; syncing Slack workspace", {
-        workspaceId: workspaceAuth.workspaceId,
-        workspaceName: workspaceAuth.workspaceName,
-        channelId,
-      });
-      syncWorkspaceInBackground(workspaceAuth, channelId);
-    });
   }
 
 }

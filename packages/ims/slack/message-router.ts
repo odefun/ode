@@ -193,11 +193,6 @@ export function registerSlackMessageRouter(deps: RouterDeps): void {
       workspaceAuth,
     });
 
-    if (!deps.isAuthorizedChannel(channelId)) {
-      log.info("[DROP] Unauthorized channel", { channelId, isMention });
-      return;
-    }
-
     if (await maybeHandleStopCommand(deps, text, channelId, threadId, say)) {
       return;
     }
