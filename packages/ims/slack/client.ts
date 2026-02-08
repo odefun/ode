@@ -365,14 +365,14 @@ function syncWorkspaceInBackground(workspace: WorkspaceAuth, channelId: string):
   void syncSlackWorkspace(workspace.workspaceId)
     .then((updatedWorkspace) => {
       invalidateOdeConfigCache();
-      log.info("Slack workspace synced after bot joined channel", {
+      log.info("Slack workspace synced after channel event", {
         workspaceId: workspace.workspaceId,
         workspaceName: updatedWorkspace.name,
         channelId,
       });
     })
     .catch((error) => {
-      log.warn("Slack workspace sync failed after bot joined channel", {
+      log.warn("Slack workspace sync failed after channel event", {
         workspaceId: workspace.workspaceId,
         channelId,
         error: String(error),
@@ -381,6 +381,48 @@ function syncWorkspaceInBackground(workspace: WorkspaceAuth, channelId: string):
     .finally(() => {
       backgroundWorkspaceSyncInFlight.delete(workspace.workspaceId);
     });
+}
+
+async function syncWorkspaceAfterMention(
+  channelId: string,
+  workspace: { workspaceId?: string; workspaceName?: string } | undefined
+): Promise<boolean> {
+  if (!workspace?.workspaceId) {
+    log.warn("Skipping Slack workspace sync; workspace id missing", {
+      channelId,
+      workspaceName: workspace?.workspaceName,
+    });
+    return false;
+  }
+
+  if (backgroundWorkspaceSyncInFlight.has(workspace.workspaceId)) {
+    log.debug("Skipping Slack workspace sync; already in flight", {
+      workspaceId: workspace.workspaceId,
+      channelId,
+    });
+    return false;
+  }
+
+  backgroundWorkspaceSyncInFlight.add(workspace.workspaceId);
+  try {
+    const updatedWorkspace = await syncSlackWorkspace(workspace.workspaceId);
+    invalidateOdeConfigCache();
+    log.info("Slack workspace synced after mention in unseen channel", {
+      workspaceId: workspace.workspaceId,
+      workspaceName: updatedWorkspace.name,
+      channelId,
+    });
+    return true;
+  } catch (error) {
+    log.warn("Slack workspace sync failed after mention in unseen channel", {
+      workspaceId: workspace.workspaceId,
+      channelId,
+      error: String(error),
+    });
+    return false;
+  } finally {
+    backgroundWorkspaceSyncInFlight.delete(workspace.workspaceId);
+  }
 }
 
 async function fetchWorkspaceAuth(
@@ -583,6 +625,7 @@ export function setupMessageHandlers(): void {
       app: slackApp,
       isAuthorizedChannel,
       resolveWorkspaceAuth,
+      syncWorkspaceForChannel: syncWorkspaceAfterMention,
       getChannelWorkspaceName: (channelId) => channelWorkspaceMap.get(channelId),
       setChannelWorkspaceName: (channelId, workspaceName) => {
         channelWorkspaceMap.set(channelId, workspaceName);

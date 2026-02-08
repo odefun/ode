@@ -6,12 +6,16 @@ type RouterDeps = {
   resolveWorkspaceAuth: (
     teamId?: string,
     enterpriseId?: string
-  ) => { workspaceName?: string; botToken?: string; [key: string]: unknown } | undefined;
+  ) => { workspaceId?: string; workspaceName?: string; botToken?: string; [key: string]: unknown } | undefined;
+  syncWorkspaceForChannel: (
+    channelId: string,
+    workspaceAuth: { workspaceId?: string; workspaceName?: string; botToken?: string; [key: string]: unknown } | undefined
+  ) => Promise<boolean>;
   getChannelWorkspaceName: (channelId: string) => string | undefined;
   setChannelWorkspaceName: (channelId: string, workspaceName: string) => void;
   setChannelWorkspaceAuth: (
     channelId: string,
-    auth: { workspaceName?: string; botToken?: string; [key: string]: unknown } | undefined
+    auth: { workspaceId?: string; workspaceName?: string; botToken?: string; [key: string]: unknown } | undefined
   ) => void;
   isThreadActive: (channelId: string, threadId: string) => boolean;
   markThreadActive: (channelId: string, threadId: string) => void;
@@ -100,6 +104,18 @@ async function maybeHandleStopCommand(
   return true;
 }
 
+async function maybeRefreshWorkspaceForMention(params: {
+  deps: RouterDeps;
+  channelId: string;
+  isMention: boolean;
+  workspaceAuth: WorkspaceAuth;
+}): Promise<void> {
+  const { deps, channelId, isMention, workspaceAuth } = params;
+  if (!isMention) return;
+  if (deps.isAuthorizedChannel(channelId)) return;
+  await deps.syncWorkspaceForChannel(channelId, workspaceAuth);
+}
+
 async function maybeNotifySettingsIssues(
   deps: RouterDeps,
   channelId: string,
@@ -155,14 +171,9 @@ export function registerSlackMessageRouter(deps: RouterDeps): void {
 
     const { channelId, userId, text, threadId, messageId } = incoming;
 
-    if (!deps.isAuthorizedChannel(channelId)) {
-      log.info("[DROP] Unauthorized channel", { channelId });
-      return;
-    }
-
     const authResult = await client.auth.test();
     const currentBotUserId = authResult.user_id as string;
-    syncWorkspaceAuth(
+    const workspaceAuth = syncWorkspaceAuth(
       deps,
       channelId,
       authResult.team_id,
@@ -174,11 +185,22 @@ export function registerSlackMessageRouter(deps: RouterDeps): void {
       return;
     }
 
-    if (await maybeHandleStopCommand(deps, text, channelId, threadId, say)) {
+    const isMention = currentBotUserId ? text.includes(`<@${currentBotUserId}>`) : false;
+    await maybeRefreshWorkspaceForMention({
+      deps,
+      channelId,
+      isMention,
+      workspaceAuth,
+    });
+
+    if (!deps.isAuthorizedChannel(channelId)) {
+      log.info("[DROP] Unauthorized channel", { channelId, isMention });
       return;
     }
 
-    const isMention = currentBotUserId ? text.includes(`<@${currentBotUserId}>`) : false;
+    if (await maybeHandleStopCommand(deps, text, channelId, threadId, say)) {
+      return;
+    }
     const threadActive = deps.isThreadActive(channelId, threadId);
 
     if (shouldDropForThreadContext(isMention, threadActive)) {

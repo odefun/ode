@@ -13,4 +13,5 @@ Ask clarifying questions if you need to focus on specific endpoints, scopes, or 
 
 ## Sources
 - https://docs.slack.dev/apis/
+- https://docs.slack.dev/reference/events
 - https://docs.slack.dev/ai/developing-ai-apps
