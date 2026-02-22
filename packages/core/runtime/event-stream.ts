@@ -63,9 +63,13 @@ export async function startEventStreamWatcher(
   }
 
   function applyStateFromEvents(): void {
+    const existingState = liveParsedState.get(messageKey);
     const parsedState = buildSessionMessageState(eventHistory, {
       workingDirectory: workingPath,
-      baseState: { startedAt: request.startedAt },
+      baseState: {
+        startedAt: request.startedAt,
+        sessionTitle: existingState?.sessionTitle,
+      },
     });
     liveParsedState.set(messageKey, parsedState);
     request.currentText = parsedState.currentText;
