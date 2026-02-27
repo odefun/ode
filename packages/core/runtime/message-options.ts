@@ -1,7 +1,6 @@
 import { DEFAULT_CODEX_MODEL, getChannelModel } from "@/config";
 import type { OpenCodeOptions } from "@/agents";
-
-type ProviderId = "opencode" | "claudecode" | "codex" | "kimi" | "kiro" | "kilo" | "qwen" | "goose" | "gemini";
+import type { AgentProviderId } from "@/shared/agent-provider";
 
 function toKiloModel(modelValue: string | null | undefined): OpenCodeOptions["model"] | undefined {
   const trimmed = modelValue?.trim();
@@ -16,7 +15,7 @@ function toKiloModel(modelValue: string | null | undefined): OpenCodeOptions["mo
 export function buildMessageOptions(params: {
   text: string;
   channelId: string;
-  providerId: ProviderId;
+  providerId: AgentProviderId;
 }): OpenCodeOptions | undefined {
   const { text, channelId, providerId } = params;
   const normalizedText = text.trimStart().toLowerCase();

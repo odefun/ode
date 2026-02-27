@@ -1,9 +1,10 @@
 import Redis from "ioredis";
 import { log } from "@/utils";
+import { normalizeAgentProviderId, type AgentProviderId } from "@/shared/agent-provider";
 
 let redis: Redis | null = null;
 
-export type SessionAgentProvider = "opencode" | "claudecode" | "codex" | "kimi" | "kiro" | "kilo" | "qwen" | "goose" | "gemini";
+export type SessionAgentProvider = AgentProviderId;
 
 function getSessionEventsKey(redisSessionId: string): string {
   return `session:events:${redisSessionId}`;
@@ -77,22 +78,7 @@ function getHarnessRunEventsKey(runId: string): string {
 }
 
 function toAgentProvider(provider: string | undefined): SessionAgentProvider {
-  const normalized = provider?.trim().toLowerCase();
-  if (normalized === "claude") return "claudecode";
-  if (
-    normalized === "opencode"
-    || normalized === "claudecode"
-    || normalized === "codex"
-    || normalized === "kimi"
-    || normalized === "kiro"
-    || normalized === "kilo"
-    || normalized === "qwen"
-    || normalized === "goose"
-    || normalized === "gemini"
-  ) {
-    return normalized;
-  }
-  return "opencode";
+  return normalizeAgentProviderId(provider);
 }
 
 function parseHarnessRunMeta(raw: string | null): HarnessRunMetaRecord | null {

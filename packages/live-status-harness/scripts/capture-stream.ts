@@ -5,6 +5,7 @@ import type { OpenCodeMessageContext } from "@/agents";
 import { buildPromptParts, buildSystemPrompt } from "@/agents/shared";
 import { getAgentProvider, type AgentProviderId } from "@/agents/registry";
 import type { OpenCodeMessage, OpenCodeOptions } from "@/agents/types";
+import { normalizeAgentProviderId } from "@/shared/agent-provider";
 import { extractEventSessionId } from "@/utils";
 import { buildHarnessRunId, HarnessRedisStore } from "../redis-store";
 import type { HarnessCapturedEvent, HarnessRunMeta } from "../types";
@@ -25,12 +26,7 @@ function parseArg(name: string): string | undefined {
 }
 
 function normalizeProvider(value: string | undefined): AgentProviderId {
-  const normalized = value?.trim().toLowerCase();
-  if (normalized === "claude") return "claudecode";
-  if (normalized === "claudecode" || normalized === "codex" || normalized === "kimi" || normalized === "kiro" || normalized === "kilo" || normalized === "qwen" || normalized === "goose" || normalized === "gemini") {
-    return normalized;
-  }
-  return "opencode";
+  return normalizeAgentProviderId(value);
 }
 
 function parseModelArg(value: string | undefined): OpenCodeOptions["model"] | undefined {

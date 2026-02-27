@@ -5,6 +5,9 @@ import { runImAdapterContractSuite } from "./contracts/im-adapter-contract";
 function makeFakeAgentAdapter(): AgentAdapter {
   return {
     supportsEventStream: false,
+    enqueueMessage: (context, text, process) => {
+      void process(context, text);
+    },
     getProviderForSession: () => "opencode",
     getDisplayNameForSession: () => "OpenCode",
     getOrCreateSession: async () => ({ sessionId: "s1", created: true }),

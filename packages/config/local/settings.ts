@@ -6,6 +6,7 @@ import {
   setChannelCwd as setChannelCwdInConfig,
 } from "./ode";
 import { loadSession, updateSessionIdForThread } from "./sessions";
+import type { AgentProviderId } from "@/shared/agent-provider";
 
 const readFileSync = fs.readFileSync;
 const mkdirSync = fs.mkdirSync;
@@ -184,7 +185,7 @@ export function setChannelCwd(channelId: string, cwd: string): void {
 export function getThreadSessionId(
   channelId: string,
   threadId: string,
-  providerId?: "opencode" | "claudecode" | "codex" | "kimi" | "kiro" | "kilo" | "qwen" | "goose" | "gemini"
+  providerId?: AgentProviderId
 ): string | null {
   const session = loadSession(channelId, threadId);
   if (!session?.sessionId) return null;

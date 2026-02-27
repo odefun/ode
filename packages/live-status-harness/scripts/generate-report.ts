@@ -2,13 +2,14 @@ import { mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentProviderId } from "@/agents/registry";
+import { AGENT_PROVIDERS, isAgentProviderId } from "@/shared/agent-provider";
 import { buildHarnessRunId, HarnessRedisStore } from "../redis-store";
 import { renderStatusesFromRun } from "../renderer";
 import { buildSessionMessageState } from "@/utils/session-inspector";
 
 const DEFAULT_OUTPUT_PATH = "packages/live-status-harness/reports/agent-live-status.md";
 const DEFAULT_OUTPUT_DIR = "packages/live-status-harness/reports";
-const DEFAULT_PROVIDERS: AgentProviderId[] = ["opencode", "claudecode", "codex", "kimi", "kiro", "kilo", "qwen", "goose", "gemini"];
+const DEFAULT_PROVIDERS: AgentProviderId[] = [...AGENT_PROVIDERS];
 const OPENCODE_REPORT_MODEL = "openai/gpt-5.3-codex";
 const REPORT_LAYOUTS = ["split", "combined", "both"] as const;
 
@@ -47,8 +48,7 @@ function parseProviders(raw: string | undefined): AgentProviderId[] {
     .filter((value) => value.length > 0);
 
   const providers = parsed.filter(
-    (value): value is AgentProviderId =>
-      value === "opencode" || value === "claudecode" || value === "codex" || value === "kimi" || value === "kiro" || value === "kilo" || value === "qwen" || value === "goose" || value === "gemini"
+    (value): value is AgentProviderId => isAgentProviderId(value)
   );
 
   return providers.length > 0 ? providers : DEFAULT_PROVIDERS;

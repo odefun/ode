@@ -70,6 +70,11 @@ export interface IMAdapter {
 
 export interface AgentAdapter {
   supportsEventStream: boolean;
+  enqueueMessage(
+    context: CoreMessageContext,
+    text: string,
+    process: (context: CoreMessageContext, text: string) => Promise<void>
+  ): void;
   getProviderForSession(sessionId: string): AgentProviderId;
   getDisplayNameForSession(sessionId: string): string;
   getOrCreateSession(

@@ -18,7 +18,6 @@ import {
 } from "@/utils";
 import { CoreStateMachine } from "@/core/state-machine";
 import type { AgentAdapter, CoreMessageContext, IMAdapter } from "@/core/types";
-import { ThreadMessageQueue } from "@/core/runtime/thread-queue";
 import { handlePendingQuestionReply } from "@/core/runtime/pending-question";
 import { recoverPendingRequests as recoverPendingRequestsInternal } from "@/core/runtime/recovery";
 import { prepareRuntimeSession } from "@/core/runtime/session-bootstrap";
@@ -106,11 +105,6 @@ export function createCoreRuntime(deps: RuntimeDeps) {
     state.stateMachines.set(key, machine);
     return machine;
   }
-
-  const threadQueue = new ThreadMessageQueue<CoreMessageContext>({
-    getKey: (context) => `${context.channelId}-${context.threadId}`,
-    process: (context, text) => handleUserMessageInternal(context, text),
-  });
 
   async function publishFinalText(params: {
     channelId: string;
@@ -249,7 +243,7 @@ export function createCoreRuntime(deps: RuntimeDeps) {
     }
 
     markMessageProcessed(context.channelId, context.threadId, context.messageId);
-    threadQueue.enqueue(context, text);
+    deps.agent.enqueueMessage(context, text, handleUserMessageInternal);
   }
 
   async function handleStopCommand(channelId: string, threadId: string): Promise<boolean> {

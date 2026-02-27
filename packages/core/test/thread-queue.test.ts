@@ -1,25 +1,35 @@
 import { describe, expect, it } from "bun:test";
-import { ThreadMessageQueue } from "../runtime/thread-queue";
+import { createAgentAdapter } from "@/agents/adapter";
+import type { CoreMessageContext } from "@/core/types";
 
-type Ctx = { channelId: string; threadId: string };
+function makeContext(channelId: string, threadId: string): CoreMessageContext {
+  return {
+    channelId,
+    threadId,
+    replyThreadId: threadId,
+    userId: "U1",
+    messageId: `${channelId}-${threadId}-${Date.now()}`,
+  };
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-describe("ThreadMessageQueue", () => {
+describe("AgentAdapter queue", () => {
   it("batches multiple messages from the same thread", async () => {
     const calls: string[] = [];
-    const queue = new ThreadMessageQueue<Ctx>({
-      getKey: (ctx) => `${ctx.channelId}-${ctx.threadId}`,
-      process: async (_ctx, text) => {
-        calls.push(text);
-      },
-    });
+    const adapter = createAgentAdapter();
 
-    queue.enqueue({ channelId: "C1", threadId: "T1" }, "one");
-    queue.enqueue({ channelId: "C1", threadId: "T1" }, "two");
-    queue.enqueue({ channelId: "C1", threadId: "T1" }, "three");
+    adapter.enqueueMessage(makeContext("C1", "T1"), "one", async (_ctx, text) => {
+      calls.push(text);
+    });
+    adapter.enqueueMessage(makeContext("C1", "T1"), "two", async (_ctx, text) => {
+      calls.push(text);
+    });
+    adapter.enqueueMessage(makeContext("C1", "T1"), "three", async (_ctx, text) => {
+      calls.push(text);
+    });
 
     await sleep(20);
 
@@ -29,15 +39,14 @@ describe("ThreadMessageQueue", () => {
 
   it("processes different thread keys independently", async () => {
     const calls: string[] = [];
-    const queue = new ThreadMessageQueue<Ctx>({
-      getKey: (ctx) => `${ctx.channelId}-${ctx.threadId}`,
-      process: async (ctx, text) => {
-        calls.push(`${ctx.threadId}:${text}`);
-      },
-    });
+    const adapter = createAgentAdapter();
 
-    queue.enqueue({ channelId: "C1", threadId: "T1" }, "a");
-    queue.enqueue({ channelId: "C1", threadId: "T2" }, "b");
+    adapter.enqueueMessage(makeContext("C1", "T1"), "a", async (ctx, text) => {
+      calls.push(`${ctx.threadId}:${text}`);
+    });
+    adapter.enqueueMessage(makeContext("C1", "T2"), "b", async (ctx, text) => {
+      calls.push(`${ctx.threadId}:${text}`);
+    });
 
     await sleep(20);
 
@@ -46,17 +55,17 @@ describe("ThreadMessageQueue", () => {
 
   it("runs a second pass when new items arrive while processing", async () => {
     const calls: string[] = [];
-    const queue = new ThreadMessageQueue<Ctx>({
-      getKey: (ctx) => `${ctx.channelId}-${ctx.threadId}`,
-      process: async (ctx, text) => {
-        calls.push(text);
-        if (text === "first") {
-          queue.enqueue(ctx, "second");
-        }
-      },
-    });
+    const adapter = createAgentAdapter();
 
-    queue.enqueue({ channelId: "C1", threadId: "T1" }, "first");
+    const ctx = makeContext("C1", "T1");
+    adapter.enqueueMessage(ctx, "first", async (nextCtx, text) => {
+      calls.push(text);
+      if (text === "first") {
+        adapter.enqueueMessage(nextCtx, "second", async (_ctx, nextText) => {
+          calls.push(nextText);
+        });
+      }
+    });
     await sleep(20);
 
     expect(calls).toEqual(["first", "second"]);

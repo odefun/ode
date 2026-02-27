@@ -83,6 +83,9 @@ function createFakeAgent(params?: {
 
   const agent: AgentAdapter = {
     supportsEventStream,
+    enqueueMessage: (context, text, process) => {
+      void process(context, text);
+    },
     getProviderForSession: () => "opencode",
     getDisplayNameForSession: () => "FakeAgent",
     getOrCreateSession: async () => ({ sessionId: "session-resilience", created: true }),

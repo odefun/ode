@@ -37,6 +37,7 @@ import {
   scopeChannelId,
   unscopeChannelId,
 } from "@/ims/shared/processor-scope";
+import { isAgentProviderId } from "@/shared/agent-provider";
 import { createRuntimeController } from "@/ims/shared/runtime-controller";
 import {
   buildLarkSettingsDetailCard,
@@ -843,17 +844,7 @@ async function processLarkCardAction(payload: unknown): Promise<void> {
       pickValueField(value, "provider"),
       field === "provider" ? selected : ""
     );
-    if (
-      provider === "opencode"
-      || provider === "claudecode"
-      || provider === "codex"
-      || provider === "kimi"
-      || provider === "kiro"
-      || provider === "kilo"
-      || provider === "qwen"
-      || provider === "goose"
-      || provider === "gemini"
-    ) {
+    if (isAgentProviderId(provider)) {
       setChannelAgentProvider(channelId, provider);
     }
 

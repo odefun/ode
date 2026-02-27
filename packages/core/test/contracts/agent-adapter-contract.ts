@@ -5,6 +5,7 @@ export function runAgentAdapterContractSuite(name: string, makeAdapter: () => Ag
   describe(`AgentAdapter contract: ${name}`, () => {
     it("exposes required functions", () => {
       const adapter = makeAdapter();
+      expect(typeof adapter.enqueueMessage).toBe("function");
       expect(typeof adapter.getOrCreateSession).toBe("function");
       expect(typeof adapter.sendMessage).toBe("function");
       expect(typeof adapter.abortSession).toBe("function");
