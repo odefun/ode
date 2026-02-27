@@ -48,14 +48,25 @@
 
 ## Remaining gaps
 
-- Move command parsing/handling behind explicit kernel command service when command routing is fully migrated.
+- Migrate remaining platform-specific `/setting` launch UX from client-level handlers to gateway + kernel command handling end-to-end.
 
-## Not yet completed (important)
+## Completed in this slice
 
-- `packages/ims/shared/platform-gateway.ts` currently defines only the interface contract (`start/stop`) and has no concrete `SlackGateway` / `DiscordGateway` / `LarkGateway` implementations yet.
-- `packages/ims/shared/inbound-adapter.ts` is still an interface-level contract; only Slack has a concrete adapter (`packages/ims/slack/slack-inbound-adapter.ts`).
-- Discord and Lark still use inline policy logic in client files; they are not fully extracted into dedicated adapter classes.
-- `BotRuntime` command branch is wired with a placeholder handler (`handleCommand: async () => {}`) and is not yet connected to a real kernel command service.
+- Added concrete platform gateway classes:
+  - `packages/ims/slack/slack-gateway.ts`
+  - `packages/ims/discord/discord-gateway.ts`
+  - `packages/ims/lark/lark-gateway.ts`
+- Added concrete inbound adapters for all platforms:
+  - `packages/ims/slack/slack-inbound-adapter.ts`
+  - `packages/ims/discord/discord-inbound-adapter.ts`
+  - `packages/ims/lark/lark-inbound-adapter.ts`
+- Introduced a kernel command service and wired `BotRuntime` command branch through it:
+  - `packages/core/kernel/command-service.ts`
+  - `packages/core/kernel/runtime-facade.ts`
+- Added parity tests (ignore/stop/forward) per platform adapter:
+  - `packages/ims/slack/slack-inbound-adapter.test.ts`
+  - `packages/ims/discord/discord-inbound-adapter.test.ts`
+  - `packages/ims/lark/lark-inbound-adapter.test.ts`
 
 ## Suggested next slice
 

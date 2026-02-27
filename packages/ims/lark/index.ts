@@ -5,6 +5,8 @@ export {
   stopLarkRuntime,
   recoverPendingRequests as recoverLarkPendingRequests,
 } from "./client";
+export { LarkGateway } from "./lark-gateway";
+export { LarkInboundAdapter } from "./lark-inbound-adapter";
 
 export * as larkUtils from "./utils";
 export * as larkState from "./state";

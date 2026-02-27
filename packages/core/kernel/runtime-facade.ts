@@ -20,14 +20,19 @@ import {
   RuntimeKernel,
   ThreadRuntimeRegistry,
 } from "@/core/kernel/runtime-kernel";
+import { KernelCommandService, type KernelCommandHandler } from "@/core/kernel/command-service";
 import type { InboundAdapter } from "@/ims/shared/inbound-adapter";
 import type { RawInboundEvent } from "@/core/model/raw-inbound-event";
 import type { RuntimeRequestContext } from "@/core/kernel/request-context";
+import { SlackInboundAdapter } from "@/ims/slack/slack-inbound-adapter";
+import { DiscordInboundAdapter } from "@/ims/discord/discord-inbound-adapter";
+import { LarkInboundAdapter } from "@/ims/lark/lark-inbound-adapter";
 
 export type RuntimeDeps = {
   platform: "slack" | "discord" | "lark";
   im: IMAdapter;
   agent: AgentAdapter;
+  handleCommand?: KernelCommandHandler;
 };
 
 type RuntimeState = {
@@ -46,12 +51,16 @@ export class KernelRuntimeFacade {
   private readonly runtimeDeps: RuntimeDeps;
   private readonly state = createRuntimeState();
   private readonly runtimeKernel: RuntimeKernel;
+  private readonly commandService: KernelCommandService;
 
   constructor(private readonly deps: RuntimeDeps) {
     this.runtimeDeps = {
       ...deps,
       im: createRateLimitedImAdapter(deps.im),
     };
+    this.commandService = new KernelCommandService({
+      handleCommand: this.deps.handleCommand,
+    });
 
     const threadRuntimeRegistry = new ThreadRuntimeRegistry({
       ttlMs: 30 * 60 * 1000,
@@ -59,6 +68,7 @@ export class KernelRuntimeFacade {
       onDecision: async (_threadKey, params) => {
         const { event, decision } = params;
         if (decision.kind === "ignore" || decision.kind === "command") return;
+        markThreadActive(event.channelId, event.threadId);
         if (decision.kind === "stop") {
           await handleStopCommand({ deps: this.runtimeDeps, channelId: event.channelId, threadId: event.threadId });
           return;
@@ -79,59 +89,19 @@ export class KernelRuntimeFacade {
       },
     });
 
-    const inboundAdapter: InboundAdapter = {
-      evaluate: (event) => {
-        const text = event.normalizedText.trim();
-        if (!text) {
-          return { kind: "ignore", reason: "empty_text" };
-        }
-        return { kind: "message", text };
-      },
-    };
-
     this.runtimeKernel = new RuntimeKernel({
       createBotRuntime: (botKey) => new BotRuntime(botKey, {
-        inboundAdapter,
-        handleCommand: async () => {},
+        inboundAdapter: createInboundAdapter(botKey.platform),
+        handleCommand: async (event, commandName, args) => {
+          await this.commandService.handle(event, commandName, args);
+        },
         threadRuntimeRegistry,
       }),
     });
   }
 
   async handleInboundEvent(event: RawInboundEvent): Promise<void> {
-    const shouldProcess = event.isTopLevel
-      ? event.mentionedBot
-      : (event.mentionedBot || event.activeThread);
-    if (!shouldProcess) return;
-
-    const text = event.normalizedText.trim();
-    if (!text) return;
-
-    if (text.toLowerCase() === "stop") {
-      const stopped = await handleStopCommand({
-        deps: this.runtimeDeps,
-        channelId: event.channelId,
-        threadId: event.threadId,
-      });
-      if (stopped) {
-        await this.runtimeDeps.im.sendMessage(event.rawChannelId ?? event.channelId, event.replyThreadId, "Request stopped.");
-      }
-      return;
-    }
-
-    markThreadActive(event.channelId, event.threadId);
-    await this.dispatchCoreMessage(
-      {
-        channelId: event.channelId,
-        rawChannelId: event.rawChannelId,
-        replyThreadId: event.replyThreadId,
-        threadId: event.threadId,
-        userId: event.userId,
-        messageId: event.messageId,
-        botToken: event.botId,
-      },
-      text
-    );
+    await this.dispatchCoreMessage(event);
   }
 
   async handleButtonSelection(params: {
@@ -225,11 +195,23 @@ export class KernelRuntimeFacade {
     if (!responses) return;
   }
 
-  private async dispatchCoreMessage(context: RuntimeRequestContext, text: string): Promise<void> {
-    if (isMessageProcessed(context.channelId, context.threadId, context.messageId)) {
-      log.debug("Skipping duplicate message", { messageId: context.messageId });
+  private async dispatchCoreMessage(event: RawInboundEvent): Promise<void> {
+    if (isMessageProcessed(event.channelId, event.threadId, event.messageId)) {
+      log.debug("Skipping duplicate message", { messageId: event.messageId });
       return;
     }
+
+    const context: RuntimeRequestContext = {
+      channelId: event.channelId,
+      rawChannelId: event.rawChannelId,
+      replyThreadId: event.replyThreadId,
+      threadId: event.threadId,
+      userId: event.userId,
+      messageId: event.messageId,
+      botToken: event.botId,
+    };
+
+    const text = event.normalizedText.trim();
 
     const pendingQuestion = getPendingQuestion(context.channelId, context.threadId);
     if (pendingQuestion) {
@@ -244,23 +226,19 @@ export class KernelRuntimeFacade {
       }
     }
 
-    markMessageProcessed(context.channelId, context.threadId, context.messageId);
-    await this.runtimeKernel.handleInbound({
-      platform: this.deps.platform,
-      botId: context.botToken ?? "default",
-      channelId: context.channelId,
-      rawChannelId: context.rawChannelId,
-      threadId: context.threadId,
-      replyThreadId: context.replyThreadId,
-      messageId: context.messageId,
-      userId: context.userId,
-      isTopLevel: false,
-      mentionedBot: true,
-      activeThread: true,
-      rawText: text,
-      normalizedText: text,
-      receivedAtMs: Date.now(),
-    });
+    markMessageProcessed(event.channelId, event.threadId, event.messageId);
+    await this.runtimeKernel.handleInbound(event);
   }
 
+}
+
+function createInboundAdapter(platform: RuntimeDeps["platform"]): InboundAdapter {
+  switch (platform) {
+    case "slack":
+      return new SlackInboundAdapter();
+    case "discord":
+      return new DiscordInboundAdapter();
+    case "lark":
+      return new LarkInboundAdapter();
+  }
 }

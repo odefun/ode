@@ -24,9 +24,6 @@ import { createCoreRuntime } from "@/core/runtime";
 import type { IMAdapter } from "@/core/types";
 import { log } from "@/utils";
 import {
-  parseIncomingCommand,
-} from "@/ims/shared/incoming-message-processor";
-import {
   createProcessorId,
 } from "@/ims/shared/processor-id";
 import { createRuntimeController } from "@/ims/shared/runtime-controller";
@@ -45,6 +42,7 @@ import {
 } from "@/ims/lark/utils/card-action-utils";
 import { LarkRuntimeState } from "@/ims/lark/state/runtime-state";
 import type { RawInboundEvent } from "@/core/model/raw-inbound-event";
+import { LarkInboundAdapter } from "@/ims/lark/lark-inbound-adapter";
 
 let larkRuntimeStarted = false;
 
@@ -68,12 +66,23 @@ type LarkBotInfoResponse = {
 
 const larkRuntimeState = new LarkRuntimeState();
 const wsClientRegistry = new Map<string, unknown>();
-const larkProcessorManager = createProcessorManager({
-  createRuntime: () => createCoreRuntime({
+const larkInboundAdapter = new LarkInboundAdapter();
+
+function createLarkRuntime(): ReturnType<typeof createCoreRuntime> {
+  return createCoreRuntime({
     platform: "lark",
     im: larkAdapter,
     agent: createAgentAdapter(),
-  }),
+    handleCommand: async ({ event, commandName }) => {
+      if (commandName !== "setting") return false;
+      await sendSettingsCard(event.channelId, event.replyThreadId, event.userId);
+      return true;
+    },
+  });
+}
+
+const larkProcessorManager = createProcessorManager({
+  createRuntime: () => createLarkRuntime(),
 });
 const MAX_LARK_MESSAGE_EDITS = 20;
 
@@ -559,11 +568,7 @@ const larkAdapter: IMAdapter = {
     buildLarkContext(channelId, threadId, userId, threadHistory),
 };
 
-const larkRecoveryRuntime = createCoreRuntime({
-  platform: "lark",
-  im: larkAdapter,
-  agent: createAgentAdapter(),
-});
+const larkRecoveryRuntime = createLarkRuntime();
 
 async function getBotOpenIdForChannel(channelId: string): Promise<string | null> {
   const creds = getLarkCredentialsForChannel(channelId);
@@ -1087,19 +1092,9 @@ async function processLarkIncomingEvent(event: LarkIncomingEvent, processorAppId
     textLength: text.length,
   });
 
-  const command = parseIncomingCommand(text);
-  if (command === "setting") {
-    logLarkEvent("Lark inbound matched /setting", {
-      channelId,
-      threadId,
-      messageId,
-      topLevelMessage,
-      isMentioned,
-    });
-    await sendSettingsCard(channelId, "", senderOpenId);
-    return;
-  }
-  if (!isMentioned && !active) {
+  const inboundDecision = larkInboundAdapter.evaluate(inboundEvent);
+
+  if (inboundDecision.kind === "ignore") {
     logLarkEvent("Lark inbound ignored: not mentioned and thread inactive", {
       channelId,
       threadId,

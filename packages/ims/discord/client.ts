@@ -23,6 +23,7 @@ import {
 import { createRuntimeController } from "@/ims/shared/runtime-controller";
 import { createProcessorId } from "@/ims/shared/processor-id";
 import {
+  buildLauncherReplyPayload,
   DISCORD_LAUNCHER_COMMANDS,
   handleDiscordSettingsInteraction,
   sendLauncherReplyForMessage,
@@ -43,6 +44,7 @@ import {
 } from "@/ims/discord/utils/rate-limit";
 import { DiscordStatusMessageIndex } from "@/ims/discord/state/status-message-index";
 import type { RawInboundEvent } from "@/core/model/raw-inbound-event";
+import { DiscordInboundAdapter } from "@/ims/discord/discord-inbound-adapter";
 
 const DISCORD_MESSAGE_LIMIT = 2000;
 const DISCORD_THREAD_NAME_LIMIT = 25;
@@ -54,12 +56,24 @@ const discordClients = new Map<string, Client>();
 const discordClientByProcessorId = new Map<string, Client>();
 const statusMessageIndex = new DiscordStatusMessageIndex();
 const discordThreadProcessorByKey = new Map<string, string>();
-const discordProcessorManager = createProcessorManager({
-  createRuntime: () => createCoreRuntime({
+const discordInboundAdapter = new DiscordInboundAdapter();
+
+function createDiscordRuntime(processorId?: string): ReturnType<typeof createCoreRuntime> {
+  return createCoreRuntime({
     platform: "discord",
     im: discordAdapter,
     agent: createAgentAdapter(),
-  }),
+    handleCommand: async ({ event, commandName }) => {
+      if (commandName !== "setting") return false;
+      const channel = await resolveTextChannel(event.replyThreadId, processorId);
+      await channel.send(buildLauncherReplyPayload("setting", event.channelId));
+      return true;
+    },
+  });
+}
+
+const discordProcessorManager = createProcessorManager({
+  createRuntime: (processorId) => createDiscordRuntime(processorId),
 });
 
 function getDiscordProcessorRuntime(processorId: string): ReturnType<typeof createCoreRuntime> {
@@ -312,11 +326,7 @@ const discordAdapter: IMAdapter = {
     buildDiscordContext(channelId, threadId, userId, threadHistory),
 };
 
-const discordRecoveryRuntime = createCoreRuntime({
-  platform: "discord",
-  im: discordAdapter,
-  agent: createAgentAdapter(),
-});
+const discordRecoveryRuntime = createDiscordRuntime();
 
 function isBotMentioned(message: any, botUserId: string): boolean {
   const debugMention = ["1", "true", "yes", "on"].includes(
@@ -428,19 +438,6 @@ async function startDiscordRuntimeInternal(reason: string): Promise<boolean> {
 
             const threadId = message.channel.id;
             const text = message.content.trim();
-            const launcherCommand = parseIncomingCommand(text);
-            if (launcherCommand) {
-              await sendLauncherReplyForMessage({
-                message,
-                command: launcherCommand,
-                channelId: parentId,
-              });
-              log.debug("Handled Discord message settings command in thread", {
-                command: launcherCommand,
-                threadId,
-              });
-              return;
-            }
             const mentioned = isBotMentioned(message, client.user.id);
             const active = isThreadActive(parentId, threadId);
             const normalizedText = mentioned ? cleanBotMention(text, client.user.id) : text;
@@ -460,6 +457,31 @@ async function startDiscordRuntimeInternal(reason: string): Promise<boolean> {
               normalizedText,
               receivedAtMs: Date.now(),
             };
+            const inboundDecision = discordInboundAdapter.evaluate(inboundEvent);
+            if (inboundDecision.kind === "ignore") {
+              log.debug(formatIncomingDropMessage(inboundDecision.reason), {
+                platform: "discord",
+                channelId: parentId,
+                threadId,
+                messageId: message.id,
+                isTopLevel: false,
+                mentioned,
+                activeThread: active,
+              });
+              return;
+            }
+            if (inboundDecision.kind === "command" && inboundDecision.name === "setting") {
+              await sendLauncherReplyForMessage({
+                message,
+                command: "setting",
+                channelId: parentId,
+              });
+              log.debug("Handled Discord message settings command in thread", {
+                command: "setting",
+                threadId,
+              });
+              return;
+            }
             rememberThreadProcessor(parentId, threadId, processorId);
             await runtime.handleInboundEvent(inboundEvent);
             return;

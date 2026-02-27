@@ -7,3 +7,4 @@ export * from "./session-bootstrap";
 export * from "./pending-question";
 export * from "./request-context";
 export * from "./request-run";
+export * from "./command-service";

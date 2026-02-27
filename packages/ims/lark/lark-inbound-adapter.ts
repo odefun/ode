@@ -4,7 +4,7 @@ import type { InboundAdapter } from "@/ims/shared/inbound-adapter";
 import type { InboundDecision } from "@/core/model/inbound-decision";
 import type { RawInboundEvent } from "@/core/model/raw-inbound-event";
 
-export class SlackInboundAdapter implements InboundAdapter {
+export class LarkInboundAdapter implements InboundAdapter {
   evaluate(event: RawInboundEvent): InboundDecision {
     const decision = defaultInboundPolicy({
       isTopLevel: event.isTopLevel,

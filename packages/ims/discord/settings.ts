@@ -72,7 +72,7 @@ const generalSettingsDrafts = new Map<string, {
   autoUpdate: AutoUpdateSetting;
 }>();
 
-type LauncherCommand = "setting";
+export type LauncherCommand = "setting";
 type LauncherAction = SettingsLauncherAction;
 
 export const DISCORD_LAUNCHER_COMMANDS = [
@@ -106,7 +106,7 @@ function buildSettingsChooserRows(channelId: string): ActionRowBuilder<ButtonBui
   ];
 }
 
-function buildLauncherReplyPayload(command: LauncherCommand, channelId: string): {
+export function buildLauncherReplyPayload(command: LauncherCommand, channelId: string): {
   content: string;
   components: ActionRowBuilder<ButtonBuilder>[];
 } {

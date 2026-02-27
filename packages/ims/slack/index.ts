@@ -19,5 +19,7 @@ export { setupInteractiveHandlers } from "./commands";
 export { stopOAuthServer } from "./oauth";
 
 export { markdownToSlack, truncateForSlack, splitForSlack } from "./utils";
+export { SlackGateway } from "./slack-gateway";
+export { SlackInboundAdapter } from "./slack-inbound-adapter";
 
 export * as slackState from "./state";
