@@ -1,4 +1,4 @@
-export {
+import {
   createSession,
   getOrCreateSession,
   sendMessage,
@@ -10,3 +10,18 @@ export {
   stopServer,
   type SessionEnvironment,
 } from "./client";
+
+class CodexMessageProcessor {
+  createSession = createSession;
+  getOrCreateSession = getOrCreateSession;
+  sendMessage = sendMessage;
+  cancelActiveRequest = cancelActiveRequest;
+  abortSession = abortSession;
+  ensureSession = ensureSession;
+  subscribeToSession = subscribeToSession;
+  startServer = startServer;
+  stopServer = stopServer;
+}
+
+export const codexAgent = new CodexMessageProcessor();
+export type { SessionEnvironment };

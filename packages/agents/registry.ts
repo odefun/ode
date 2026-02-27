@@ -1,12 +1,12 @@
 import { claudeCodeAgent } from "./claude";
-import * as codex from "./codex";
-import * as kimi from "./kimi";
-import * as kiro from "./kiro";
-import * as kilo from "./kilo";
+import { codexAgent } from "./codex";
+import { kimiAgent } from "./kimi";
+import { kiroAgent } from "./kiro";
+import { kiloAgent } from "./kilo";
 import { openCodeAgent } from "./opencode";
-import * as qwen from "./qwen";
-import * as goose from "./goose";
-import * as gemini from "./gemini";
+import { qwenAgent } from "./qwen";
+import { gooseAgent } from "./goose";
+import { geminiAgent } from "./gemini";
 import {
   AGENT_PROVIDERS,
   normalizeAgentProviderId,
@@ -52,13 +52,13 @@ type AgentProviderRuntime = Omit<AgentProvider, "id" | "supportsEventStream">;
 const providerModules = {
   opencode: openCodeAgent,
   claudecode: claudeCodeAgent,
-  codex,
-  kimi,
-  kiro,
-  kilo,
-  qwen,
-  goose,
-  gemini,
+  codex: codexAgent,
+  kimi: kimiAgent,
+  kiro: kiroAgent,
+  kilo: kiloAgent,
+  qwen: qwenAgent,
+  goose: gooseAgent,
+  gemini: geminiAgent,
 } satisfies Record<AgentProviderId, AgentProviderRuntime>;
 
 function createProvider(providerId: AgentProviderId): AgentProvider {

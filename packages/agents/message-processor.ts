@@ -186,5 +186,3 @@ export class MessageProcessor implements AgentAdapter {
 export function createMessageProcessor(): AgentAdapter {
   return new MessageProcessor();
 }
-
-export const createAgentAdapter = createMessageProcessor;

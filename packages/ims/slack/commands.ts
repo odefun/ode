@@ -49,8 +49,8 @@ import {
   type StatusMessageFormat,
   type GitStrategy,
 } from "@/config";
-import { startServer as startOpenCodeServer } from "@/agents/opencode";
-import { startServer as startCodexServer } from "@/agents/codex";
+import { openCodeAgent } from "@/agents/opencode";
+import { codexAgent } from "@/agents/codex";
 
 const SETTINGS_LAUNCH_ACTION = "open_settings_modal";
 const SETTINGS_MODAL_ID = "settings_modal";
@@ -515,12 +515,12 @@ export function setupInteractiveHandlers(): void {
     if (!channelId || !triggerId) return;
 
     try {
-      await startOpenCodeServer();
+      await openCodeAgent.startServer();
     } catch {
       // Fall back to models currently stored in local config.
     }
     try {
-      await startCodexServer();
+      await codexAgent.startServer();
     } catch {
       // Fall back to models currently stored in local config.
     }
@@ -609,13 +609,13 @@ export function setupInteractiveHandlers(): void {
     const selectedProvider = parseAgentProvider(selectedOption);
     if (selectedProvider === "opencode") {
       try {
-        await startOpenCodeServer();
+        await openCodeAgent.startServer();
       } catch {
         // Fall back to models currently stored in local config.
       }
     } else if (selectedProvider === "codex") {
       try {
-        await startCodexServer();
+        await codexAgent.startServer();
       } catch {
         // Fall back to models currently stored in local config.
       }
