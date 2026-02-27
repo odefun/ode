@@ -18,7 +18,7 @@ import {
 } from "@/config/local/settings";
 import { createCoreRuntime } from "@/core/runtime";
 import type { IMAdapter } from "@/core/types";
-import { createAgentAdapter } from "@/agents/adapter";
+import { createMessageProcessor } from "@/agents/message-processor";
 import type { OpenCodeMessageContext } from "@/agents";
 import { log } from "@/utils";
 import { getSlackActionApiUrl } from "./config";
@@ -52,7 +52,7 @@ const slackProcessorManager = createProcessorManager({
   createRuntime: () => createCoreRuntime({
     platform: "slack",
     im: slackAdapter,
-    agent: createAgentAdapter(),
+    agent: createMessageProcessor(),
   }),
   defaultProcessorId: "slack:default",
 });
@@ -426,7 +426,7 @@ const slackAdapter: IMAdapter = {
 const slackRecoveryRuntime = createCoreRuntime({
   platform: "slack",
   im: slackAdapter,
-  agent: createAgentAdapter(),
+  agent: createMessageProcessor(),
 });
 
 export async function recoverPendingRequests(): Promise<void> {

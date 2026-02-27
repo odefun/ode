@@ -5,7 +5,7 @@ import {
 } from "discord.js";
 import { createCoreRuntime } from "@/core/runtime";
 import type { IMAdapter } from "@/core/types";
-import { createAgentAdapter } from "@/agents/adapter";
+import { createMessageProcessor } from "@/agents/message-processor";
 import type { OpenCodeMessageContext } from "@/agents";
 import {
   getChannelSystemMessage,
@@ -61,7 +61,7 @@ const discordProcessorManager = createProcessorManager({
   createRuntime: () => createCoreRuntime({
     platform: "discord",
     im: discordAdapter,
-    agent: createAgentAdapter(),
+    agent: createMessageProcessor(),
   }),
 });
 
@@ -308,7 +308,7 @@ const discordAdapter: IMAdapter = {
 const discordRecoveryRuntime = createCoreRuntime({
   platform: "discord",
   im: discordAdapter,
-  agent: createAgentAdapter(),
+  agent: createMessageProcessor(),
 });
 
 function isBotMentioned(message: any, botUserId: string): boolean {

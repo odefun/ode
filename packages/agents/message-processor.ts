@@ -24,7 +24,7 @@ type QueueState = {
   items: QueueItem[];
 };
 
-class AgentMessageProcessor implements AgentAdapter {
+export class MessageProcessor implements AgentAdapter {
   readonly supportsEventStream = true;
   private readonly sessionProviders = new Map<string, AgentProviderId>();
   private readonly queues = new Map<string, QueueState>();
@@ -183,6 +183,8 @@ class AgentMessageProcessor implements AgentAdapter {
   }
 }
 
-export function createAgentAdapter(): AgentAdapter {
-  return new AgentMessageProcessor();
+export function createMessageProcessor(): AgentAdapter {
+  return new MessageProcessor();
 }
+
+export const createAgentAdapter = createMessageProcessor;

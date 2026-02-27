@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { createAgentAdapter } from "@/agents/adapter";
+import { createMessageProcessor } from "@/agents/message-processor";
 
 const runLive = process.env.RUN_LIVE_E2E === "1";
 
@@ -16,7 +16,7 @@ describe("live provider smoke e2e", () => {
       throw new Error("LIVE_E2E_PROVIDER is required when RUN_LIVE_E2E=1");
     }
 
-    const adapter = createAgentAdapter();
+    const adapter = createMessageProcessor();
     const session = await adapter.getOrCreateSession(channelId, threadId, cwd, {});
     const modelId = process.env.LIVE_E2E_MODEL?.trim();
     const options = modelId

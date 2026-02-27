@@ -1,4 +1,4 @@
-import { createAgentAdapter } from "@/agents/adapter";
+import { createMessageProcessor } from "@/agents/message-processor";
 import type { OpenCodeMessageContext } from "@/agents/types";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import {
@@ -81,7 +81,7 @@ const larkProcessorManager = createProcessorManager({
   createRuntime: () => createCoreRuntime({
     platform: "lark",
     im: larkAdapter,
-    agent: createAgentAdapter(),
+    agent: createMessageProcessor(),
   }),
 });
 const MAX_LARK_MESSAGE_EDITS = 20;
@@ -590,7 +590,7 @@ const larkAdapter: IMAdapter = {
 const larkRecoveryRuntime = createCoreRuntime({
   platform: "lark",
   im: larkAdapter,
-  agent: createAgentAdapter(),
+  agent: createMessageProcessor(),
 });
 
 async function getBotOpenIdForChannel(channelId: string): Promise<string | null> {

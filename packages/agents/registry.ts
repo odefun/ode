@@ -62,10 +62,19 @@ const providerModules = {
 } satisfies Record<AgentProviderId, AgentProviderRuntime>;
 
 function createProvider(providerId: AgentProviderId): AgentProvider {
+  const runtime = providerModules[providerId] as AgentProviderRuntime;
   return {
     id: providerId,
     supportsEventStream: providerSupportsEventStream(providerId),
-    ...providerModules[providerId],
+    startServer: (...args) => runtime.startServer(...args),
+    stopServer: (...args) => runtime.stopServer(...args),
+    createSession: (...args) => runtime.createSession(...args),
+    getOrCreateSession: (...args) => runtime.getOrCreateSession(...args),
+    sendMessage: (...args) => runtime.sendMessage(...args),
+    abortSession: (...args) => runtime.abortSession(...args),
+    cancelActiveRequest: (...args) => runtime.cancelActiveRequest(...args),
+    ensureSession: (...args) => runtime.ensureSession(...args),
+    subscribeToSession: (...args) => runtime.subscribeToSession(...args),
   };
 }
 

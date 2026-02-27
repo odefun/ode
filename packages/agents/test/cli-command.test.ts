@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { buildPromptParts, buildPromptText, buildSystemPrompt } from "../shared";
-import { buildOpenCodeCommand } from "../opencode/client";
-import { buildClaudeCommand, buildClaudeCommandArgs } from "../claude/client";
+import { buildOpenCodeCommand } from "../opencode";
+import { buildClaudeCommand, buildClaudeCommandArgs } from "../claude";
 import { buildCodexCommand, buildCodexCommandArgs } from "../codex/client";
 import { buildKimiCommand, buildKimiCommandArgs } from "../kimi/client";
 import { buildKiroCommand, buildKiroCommandArgs } from "../kiro/client";

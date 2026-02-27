@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { createAgentAdapter } from "@/agents/adapter";
+import { createMessageProcessor } from "@/agents/message-processor";
 import type { CoreMessageContext } from "@/core/types";
 
 function makeContext(channelId: string, threadId: string): CoreMessageContext {
@@ -19,7 +19,7 @@ function sleep(ms: number): Promise<void> {
 describe("AgentAdapter queue", () => {
   it("batches multiple messages from the same thread", async () => {
     const calls: string[] = [];
-    const adapter = createAgentAdapter();
+    const adapter = createMessageProcessor();
 
     adapter.enqueueMessage(makeContext("C1", "T1"), "one", async (_ctx, text) => {
       calls.push(text);
@@ -39,7 +39,7 @@ describe("AgentAdapter queue", () => {
 
   it("processes different thread keys independently", async () => {
     const calls: string[] = [];
-    const adapter = createAgentAdapter();
+    const adapter = createMessageProcessor();
 
     adapter.enqueueMessage(makeContext("C1", "T1"), "a", async (ctx, text) => {
       calls.push(`${ctx.threadId}:${text}`);
@@ -55,7 +55,7 @@ describe("AgentAdapter queue", () => {
 
   it("runs a second pass when new items arrive while processing", async () => {
     const calls: string[] = [];
-    const adapter = createAgentAdapter();
+    const adapter = createMessageProcessor();
 
     const ctx = makeContext("C1", "T1");
     adapter.enqueueMessage(ctx, "first", async (nextCtx, text) => {
