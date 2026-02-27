@@ -1,9 +1,9 @@
-import * as claude from "./claude";
+import { claudeCodeAgent } from "./claude";
 import * as codex from "./codex";
 import * as kimi from "./kimi";
 import * as kiro from "./kiro";
 import * as kilo from "./kilo";
-import * as opencode from "./opencode";
+import { openCodeAgent } from "./opencode";
 import * as qwen from "./qwen";
 import * as goose from "./goose";
 import * as gemini from "./gemini";
@@ -50,8 +50,8 @@ export type AgentProvider = {
 type AgentProviderRuntime = Omit<AgentProvider, "id" | "supportsEventStream">;
 
 const providerModules = {
-  opencode,
-  claudecode: claude,
+  opencode: openCodeAgent,
+  claudecode: claudeCodeAgent,
   codex,
   kimi,
   kiro,

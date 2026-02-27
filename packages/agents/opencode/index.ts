@@ -1,4 +1,4 @@
-export {
+import {
   startServer,
   stopServer,
   isServerReady,
@@ -11,8 +11,7 @@ export {
   subscribeToSession,
   type EventHandler,
 } from "./server";
-
-export {
+import {
   createSession,
   getOrCreateSession,
   sendMessage,
@@ -21,6 +20,46 @@ export {
   statusFromEvent,
   type ProgressEvent,
 } from "./client";
+
+export const openCodeAgent = {
+  startServer,
+  stopServer,
+  isServerReady,
+  createSessionInstance,
+  getSessionClient,
+  getAnyServerUrl,
+  ensureSession,
+  ensureValidSession,
+  stopAllSessions,
+  subscribeToSession,
+  createSession,
+  getOrCreateSession,
+  sendMessage,
+  abortSession,
+  cancelActiveRequest,
+  statusFromEvent,
+};
+
+export {
+  startServer,
+  stopServer,
+  isServerReady,
+  createSessionInstance,
+  getSessionClient,
+  getAnyServerUrl,
+  ensureSession,
+  ensureValidSession,
+  stopAllSessions,
+  subscribeToSession,
+  createSession,
+  getOrCreateSession,
+  sendMessage,
+  abortSession,
+  cancelActiveRequest,
+  statusFromEvent,
+  type EventHandler,
+  type ProgressEvent,
+};
 
 export type {
   OpenCodeMessage,
