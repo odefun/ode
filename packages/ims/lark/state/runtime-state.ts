@@ -20,6 +20,10 @@ export class LarkRuntimeState {
     max: 20000,
     ttlMs: 24 * 60 * 60 * 1000,
   });
+  private readonly messageProcessorMap = new RuntimeCache<string, string>({
+    max: 20000,
+    ttlMs: 24 * 60 * 60 * 1000,
+  });
 
   getTenantToken(workspaceId: string): TenantToken | undefined {
     return this.tenantTokenCache.get(workspaceId);
@@ -49,6 +53,18 @@ export class LarkRuntimeState {
     this.sentMessageThreadMap.delete(messageId);
   }
 
+  setMessageProcessor(messageId: string, processorId: string): void {
+    this.messageProcessorMap.set(messageId, processorId);
+  }
+
+  getMessageProcessor(messageId: string): string | undefined {
+    return this.messageProcessorMap.get(messageId);
+  }
+
+  deleteMessageProcessor(messageId: string): void {
+    this.messageProcessorMap.delete(messageId);
+  }
+
   getMessageEditCount(messageId: string): number {
     return this.larkMessageEditCounts.get(messageId) ?? 0;
   }
@@ -71,5 +87,6 @@ export class LarkRuntimeState {
     this.botOpenIdCache.clear();
     this.sentMessageThreadMap.clear();
     this.larkMessageEditCounts.clear();
+    this.messageProcessorMap.clear();
   }
 }

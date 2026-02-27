@@ -13,8 +13,9 @@ import {
   getDiscordTargetChannels,
   getGitHubInfoForUser,
 } from "@/config";
-import { findReplyThreadIdByStatusMessageTs } from "@/config/local/sessions";
 import {
+  findReplyThreadIdByStatusMessageTs,
+  findStatusMessageBotIdByStatusMessageTs,
   getThreadParticipantBotIds,
   isThreadActive,
   loadSession,
@@ -193,6 +194,9 @@ async function sendMessage(
         const sent = await channel.send(chunk);
         firstId = firstId || sent.id;
         statusMessageIndex.setThreadId(sent.id, threadId);
+        if (processorId) {
+          statusMessageIndex.setProcessorId(sent.id, processorId);
+        }
       } catch (error) {
         log.warn("Failed to send Discord message chunk", {
           threadId,
@@ -224,6 +228,8 @@ async function updateMessage(
   try {
     const mappedThreadId = statusMessageIndex.getThreadId(messageId);
     const persistedThreadId = findReplyThreadIdByStatusMessageTs(messageId);
+    const mappedProcessorId = statusMessageIndex.getProcessorId(messageId);
+    const persistedProcessorId = findStatusMessageBotIdByStatusMessageTs(messageId);
     const threadId = mappedThreadId || persistedThreadId || rawChannelId;
     if (!threadId) {
       log.warn("Cannot update Discord message without known thread", { messageId });
@@ -232,7 +238,12 @@ async function updateMessage(
     if (!mappedThreadId && persistedThreadId) {
       statusMessageIndex.setThreadId(messageId, persistedThreadId);
     }
-    const processorId = getRememberedThreadProcessor(channelId, threadId);
+    const processorId = mappedProcessorId
+      || persistedProcessorId
+      || getRememberedThreadProcessor(channelId, threadId);
+    if (!mappedProcessorId && processorId) {
+      statusMessageIndex.setProcessorId(messageId, processorId);
+    }
     const channel = await resolveTextChannel(threadId, processorId);
     const content = splitForDiscord(text, DISCORD_MESSAGE_LIMIT)[0] ?? text;
     let lastRateLimitError: unknown;
@@ -241,6 +252,10 @@ async function updateMessage(
       try {
         const message = await channel.messages.fetch(messageId);
         await message.edit(content);
+        statusMessageIndex.setThreadId(messageId, threadId);
+        if (processorId) {
+          statusMessageIndex.setProcessorId(messageId, processorId);
+        }
         lastRateLimitError = undefined;
         break;
       } catch (error) {
@@ -285,6 +300,7 @@ async function updateMessage(
       messageId,
       channelId,
       resolvedChannelId: statusMessageIndex.getThreadId(messageId) || findReplyThreadIdByStatusMessageTs(messageId) || rawChannelId,
+      resolvedProcessorId: statusMessageIndex.getProcessorId(messageId) || findStatusMessageBotIdByStatusMessageTs(messageId) || null,
       error: errorMessage,
       errorStack,
     });
@@ -298,7 +314,9 @@ async function deleteMessage(channelId: string, messageId: string): Promise<void
   const rawChannelId = channelId;
   const threadId = statusMessageIndex.getThreadId(messageId) || findReplyThreadIdByStatusMessageTs(messageId) || rawChannelId;
   if (!threadId) return;
-  const processorId = getRememberedThreadProcessor(channelId, threadId);
+  const processorId = statusMessageIndex.getProcessorId(messageId)
+    || findStatusMessageBotIdByStatusMessageTs(messageId)
+    || getRememberedThreadProcessor(channelId, threadId);
   const channel = await resolveTextChannel(threadId, processorId);
   const message = await channel.messages.fetch(messageId);
   await message.delete();

@@ -314,7 +314,8 @@ export async function runOpenRequest(
     context.replyThreadId,
     context.threadId,
     statusTs,
-    message
+    message,
+    context.botToken
   );
   session.activeRequest = request;
   saveSession(session);

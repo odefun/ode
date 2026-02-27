@@ -37,6 +37,7 @@ export interface ActiveRequest {
   replyThreadId: string;
   threadId: string;
   statusMessageTs: string;
+  statusMessageBotId?: string;
   prompt: string;
   startedAt: number;
   lastUpdatedAt: number;
@@ -358,7 +359,8 @@ export function createActiveRequest(
   replyThreadId: string,
   threadId: string,
   statusMessageTs: string,
-  prompt: string
+  prompt: string,
+  statusMessageBotId?: string
 ): ActiveRequest {
   return {
     sessionId,
@@ -366,6 +368,7 @@ export function createActiveRequest(
     replyThreadId,
     threadId,
     statusMessageTs,
+    ...(statusMessageBotId ? { statusMessageBotId } : {}),
     prompt,
     startedAt: Date.now(),
     lastUpdatedAt: Date.now(),
@@ -529,6 +532,26 @@ export function findReplyThreadIdByStatusMessageTs(messageTs: string): string | 
   return null;
 }
 
+export function findStatusMessageBotIdByStatusMessageTs(messageTs: string): string | null {
+  for (const session of activeSessions.values()) {
+    const activeRequest = session.activeRequest;
+    if (!activeRequest) continue;
+    if (activeRequest.statusMessageTs === messageTs) {
+      return activeRequest.statusMessageBotId || null;
+    }
+  }
+
+  if (!sessionsHydrated) {
+    const foundFromDisk = findStatusMessageBotIdByStatusMessageTsFromDisk(messageTs);
+    if (foundFromDisk) {
+      return foundFromDisk;
+    }
+    scheduleSessionsHydration();
+  }
+
+  return null;
+}
+
 function findReplyThreadIdByStatusMessageTsFromDisk(messageTs: string): string | null {
   try {
     ensureSessionsDir();
@@ -554,6 +577,43 @@ function findReplyThreadIdByStatusMessageTsFromDisk(messageTs: string): string |
         if (!activeRequest) continue;
         if (activeRequest.statusMessageTs === messageTs) {
           return activeRequest.replyThreadId || null;
+        }
+      } catch {
+        // Skip invalid session files
+      }
+    }
+  } catch {
+    // Ignore directory read errors
+  }
+
+  return null;
+}
+
+function findStatusMessageBotIdByStatusMessageTsFromDisk(messageTs: string): string | null {
+  try {
+    ensureSessionsDir();
+    const files = readdirSync(SESSIONS_DIR);
+    const now = Date.now();
+
+    for (const file of files) {
+      if (!file.endsWith(".json")) continue;
+      const filePath = join(SESSIONS_DIR, file);
+      try {
+        const data = readFileSync(filePath, "utf-8");
+        const session = normalizeLoadedSession(JSON.parse(data) as PersistedSession);
+        if (isSessionExpired(session, now)) {
+          continue;
+        }
+
+        const sessionKey = getSessionKey(session.channelId, session.threadId);
+        if (!activeSessions.has(sessionKey)) {
+          activeSessions.set(sessionKey, session);
+        }
+
+        const activeRequest = session.activeRequest;
+        if (!activeRequest) continue;
+        if (activeRequest.statusMessageTs === messageTs) {
+          return activeRequest.statusMessageBotId || null;
         }
       } catch {
         // Skip invalid session files

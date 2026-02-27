@@ -18,7 +18,10 @@ import {
   type StatusMessageFormat,
   getWorkspaces,
 } from "@/config";
-import { findReplyThreadIdByStatusMessageTs } from "@/config/local/sessions";
+import {
+  findReplyThreadIdByStatusMessageTs,
+  findStatusMessageBotIdByStatusMessageTs,
+} from "@/config/local/sessions";
 import {
   getThreadParticipantBotIds,
   isThreadActive,
@@ -145,6 +148,19 @@ function getLarkCredentialsForChannel(channelId: string): LarkCredentials | null
   };
 }
 
+function getLarkCredentialsForProcessorId(processorId: string): LarkCredentials | null {
+  if (!processorId) return null;
+  for (const workspace of getLarkAppCredentials()) {
+    if (createProcessorId("lark", workspace.appId) !== processorId) continue;
+    return {
+      workspaceId: workspace.workspaceId,
+      appId: workspace.appId,
+      appSecret: workspace.appSecret,
+    };
+  }
+  return null;
+}
+
 async function getLarkTenantAccessToken(creds: LarkCredentials): Promise<string> {
   const cached = larkRuntimeState.getTenantToken(creds.workspaceId);
   const now = Date.now();
@@ -218,6 +234,7 @@ async function sendLarkMessage(params: {
   threadId: string;
   msgType: LarkMessageType;
   content: Record<string, unknown>;
+  processorId?: string;
 }): Promise<string | undefined> {
   const rawChannelId = params.channelId;
   const creds = getLarkCredentialsForChannel(params.channelId);
@@ -255,6 +272,9 @@ async function sendLarkMessage(params: {
       channelId: rawChannelId,
       threadId: params.threadId,
     });
+    if (params.processorId) {
+      larkRuntimeState.setMessageProcessor(messageId, params.processorId);
+    }
   }
   return messageId;
 }
@@ -344,11 +364,14 @@ async function sendMessage(
   threadId: string,
   text: string
 ): Promise<string | undefined> {
+  const creds = getLarkCredentialsForChannel(channelId);
+  const processorId = creds ? createProcessorId("lark", creds.appId) : undefined;
   return sendLarkMessage({
     channelId,
     threadId: threadId || "",
     msgType: "post",
     content: buildLarkPostContent(text),
+    processorId,
   });
 }
 
@@ -376,8 +399,14 @@ async function updateMessage(
   text: string
 ): Promise<string | undefined> {
   const rawChannelId = channelId;
-  const creds = getLarkCredentialsForChannel(channelId);
+  const trackedProcessorId = larkRuntimeState.getMessageProcessor(messageId)
+    || findStatusMessageBotIdByStatusMessageTs(messageId)
+    || undefined;
+  const creds = (trackedProcessorId
+    ? getLarkCredentialsForProcessorId(trackedProcessorId)
+    : null) || getLarkCredentialsForChannel(channelId);
   if (!creds) return;
+  const effectiveProcessorId = trackedProcessorId ?? createProcessorId("lark", creds.appId);
   const token = await getLarkTenantAccessToken(creds);
 
   const editCount = larkRuntimeState.getMessageEditCount(messageId);
@@ -388,6 +417,7 @@ async function updateMessage(
       const replacementMessageId = await sendMessage(channelId, trackedThreadId, text);
       if (replacementMessageId) {
         larkRuntimeState.moveMessageEditCount(messageId, replacementMessageId);
+        larkRuntimeState.setMessageProcessor(replacementMessageId, effectiveProcessorId);
         log.info("Lark message edit limit reached; replaced status message", {
           channelId: rawChannelId,
           oldMessageId: messageId,
@@ -423,6 +453,7 @@ async function updateMessage(
       `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`,
       payload
     );
+    larkRuntimeState.setMessageProcessor(messageId, effectiveProcessorId);
     larkRuntimeState.setMessageEditCount(messageId, editCount + 1);
     return;
   } catch (error) {
@@ -452,7 +483,8 @@ async function updateMessage(
         `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`,
         payload
       );
-       larkRuntimeState.setMessageEditCount(messageId, editCount + 1);
+      larkRuntimeState.setMessageProcessor(messageId, effectiveProcessorId);
+      larkRuntimeState.setMessageEditCount(messageId, editCount + 1);
       return;
     } catch (fallbackError) {
       const fallbackMessage = String(fallbackError);
@@ -481,7 +513,12 @@ async function updateMessage(
 }
 
 async function deleteMessage(channelId: string, messageId: string): Promise<void> {
-  const creds = getLarkCredentialsForChannel(channelId);
+  const trackedProcessorId = larkRuntimeState.getMessageProcessor(messageId)
+    || findStatusMessageBotIdByStatusMessageTs(messageId)
+    || undefined;
+  const creds = (trackedProcessorId
+    ? getLarkCredentialsForProcessorId(trackedProcessorId)
+    : null) || getLarkCredentialsForChannel(channelId);
   if (!creds) return;
   const token = await getLarkTenantAccessToken(creds);
   try {
@@ -492,6 +529,7 @@ async function deleteMessage(channelId: string, messageId: string): Promise<void
     );
     larkRuntimeState.deleteMessageThread(messageId);
     larkRuntimeState.deleteMessageEditCount(messageId);
+    larkRuntimeState.deleteMessageProcessor(messageId);
   } catch {
     // Ignore delete failures
   }
