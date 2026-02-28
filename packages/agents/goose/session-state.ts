@@ -1,8 +1,7 @@
 import type { SessionMessageState, SessionTodo } from "@/utils/session-inspector";
 import {
   applyAnthropicStyleStreamEvent,
-  applyAssistantBlocks,
-  applyUserToolResults,
+  applyAssistantUserResultBranches,
   extractPrefixedRecord,
   parseTodosFromToolInput,
   extractSessionTitle,
@@ -116,6 +115,7 @@ export function applyGooseRecordToState(
   streamState: GooseStreamStateMaps
 ): void {
   const { textByIndex, thinkingByIndex, toolByIndex, toolById } = streamState;
+  const blocks = record.message?.content ?? [];
   const sessionTitle = extractSessionTitle(record);
   if (sessionTitle) {
     state.sessionTitle = sessionTitle;
@@ -213,18 +213,17 @@ export function applyGooseRecordToState(
     }
   }
 
-  if (record.type === "assistant") {
-    applyAssistantBlocks(state, record.message?.content ?? [], { toolById }, "goose-tool");
-    return;
-  }
-
-  if (record.type === "user") {
-    applyUserToolResults(state, record.message?.content ?? [], { toolById });
-    return;
-  }
-
-  if (record.type === "result") {
-    state.phaseStatus = record.is_error ? "Goose reported an error" : "Finalizing response";
+  if (applyAssistantUserResultBranches({
+    state,
+    blocks,
+    streamState: { toolById },
+    toolPrefix: "goose-tool",
+    providerName: "Goose",
+    isError: record.is_error,
+    assistant: record.type === "assistant",
+    user: record.type === "user",
+    result: record.type === "result",
+  })) {
     return;
   }
 

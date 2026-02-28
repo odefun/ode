@@ -9,7 +9,7 @@ type StreamEventRecord = {
   };
 };
 
-type ToolBlock = {
+export type ToolBlock = {
   type?: string;
   text?: string;
   id?: string;
@@ -19,6 +19,53 @@ type ToolBlock = {
   content?: string;
   is_error?: boolean;
 };
+
+export function applyAssistantUserResultBranches<TTool extends StreamToolState>(params: {
+  state: SessionMessageState;
+  blocks: ToolBlock[];
+  streamState: Pick<StreamStateMaps<TTool>, "toolById">;
+  toolPrefix: string;
+  providerName: string;
+  isError?: boolean;
+  assistant: boolean;
+  user: boolean;
+  result: boolean;
+  beforeAssistant?: (blocks: ToolBlock[]) => void;
+  beforeUser?: (blocks: ToolBlock[]) => void;
+}): boolean {
+  const {
+    state,
+    blocks,
+    streamState,
+    toolPrefix,
+    providerName,
+    isError,
+    assistant,
+    user,
+    result,
+    beforeAssistant,
+    beforeUser,
+  } = params;
+
+  if (assistant) {
+    beforeAssistant?.(blocks);
+    applyAssistantBlocks(state, blocks, streamState, toolPrefix);
+    return true;
+  }
+
+  if (user) {
+    beforeUser?.(blocks);
+    applyUserToolResults(state, blocks, streamState);
+    return true;
+  }
+
+  if (result) {
+    state.phaseStatus = isError ? `${providerName} reported an error` : "Finalizing response";
+    return true;
+  }
+
+  return false;
+}
 
 export type StreamToolState = SessionTool & {
   inputBuffer?: string;

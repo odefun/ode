@@ -1,5 +1,5 @@
 import type { SessionMessageState, SessionTool } from "@/utils/session-inspector";
-import { tryParseObject, updateTool } from "@/agents/session-state/shared";
+import { extractPrefixedRecord, tryParseObject, updateTool } from "@/agents/session-state/shared";
 
 type KimiToolCall = {
   id?: string;
@@ -86,10 +86,7 @@ export function extractKimiRecord(
   eventData: Record<string, unknown>,
   eventProps: Record<string, unknown>
 ): KimiRawRecord | null {
-  if (!type.startsWith("kimi.raw.")) return null;
-  const candidate = eventProps.record ?? eventData.record;
-  if (!candidate || typeof candidate !== "object") return null;
-  return candidate as KimiRawRecord;
+  return extractPrefixedRecord<KimiRawRecord>(type, "kimi.raw.", eventData, eventProps);
 }
 
 export function applyKimiRecordToState(

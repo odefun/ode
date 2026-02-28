@@ -1,8 +1,7 @@
 import type { SessionMessageState } from "@/utils/session-inspector";
 import {
   applyAnthropicStyleStreamEvent,
-  applyAssistantBlocks,
-  applyUserToolResults,
+  applyAssistantUserResultBranches,
   extractPrefixedRecord,
   extractSessionTitle,
   type StreamStateMaps,
@@ -90,6 +89,7 @@ export function applyKiloRecordToState(
 
   const role = typeof record.role === "string" ? record.role.trim().toLowerCase() : "";
   const recordType = typeof record.type === "string" ? record.type.trim().toLowerCase() : "";
+  const blocks = getContentBlocks(record);
 
   if (recordType === "text") {
     const text = typeof record.part?.text === "string" ? record.part.text.trim() : "";
@@ -132,25 +132,29 @@ export function applyKiloRecordToState(
     return;
   }
 
-  if (record.type === "assistant" || role === "assistant") {
-    const blocks = getContentBlocks(record);
-    const fallbackText = typeof record.content === "string" ? record.content.trim() : "";
-    const text = blocks.filter((block) => block?.type === "text").map((block) => block.text ?? "").join("").trim();
-    if (text || fallbackText) {
-      state.currentText = text || fallbackText;
-      state.phaseStatus = "Drafting response";
-    }
-    applyAssistantBlocks(state, blocks, { toolById }, "kilo-tool");
-    return;
-  }
-
-  if (record.type === "user" || role === "tool") {
-    applyUserToolResults(state, getContentBlocks(record), { toolById });
-    return;
-  }
-
-  if (record.type === "result") {
-    state.phaseStatus = record.is_error ? "Kilo reported an error" : "Finalizing response";
+  const fallbackText = typeof record.content === "string" ? record.content.trim() : "";
+  if (applyAssistantUserResultBranches({
+    state,
+    blocks,
+    streamState: { toolById },
+    toolPrefix: "kilo-tool",
+    providerName: "Kilo",
+    isError: record.is_error,
+    assistant: record.type === "assistant" || role === "assistant",
+    user: record.type === "user" || role === "tool",
+    result: record.type === "result",
+    beforeAssistant: (assistantBlocks) => {
+      const text = assistantBlocks
+        .filter((block) => block?.type === "text")
+        .map((block) => block.text ?? "")
+        .join("")
+        .trim();
+      if (text || fallbackText) {
+        state.currentText = text || fallbackText;
+        state.phaseStatus = "Drafting response";
+      }
+    },
+  })) {
     return;
   }
 

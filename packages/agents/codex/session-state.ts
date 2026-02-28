@@ -1,4 +1,5 @@
 import type { SessionMessageState, SessionTool } from "@/utils/session-inspector";
+import { updateTool } from "@/agents/session-state/shared";
 
 export type CodexRawRecord = {
   type?: string;
@@ -20,15 +21,6 @@ export type CodexRawRecord = {
     message?: string;
   };
 };
-
-function updateTool(state: SessionMessageState, tool: SessionTool): void {
-  const existingIdx = state.tools.findIndex((current) => current.id === tool.id);
-  if (existingIdx >= 0) {
-    state.tools[existingIdx] = tool;
-    return;
-  }
-  state.tools.push(tool);
-}
 
 export function extractCodexRecord(
   type: string,

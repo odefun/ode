@@ -1,8 +1,7 @@
 import type { SessionMessageState } from "@/utils/session-inspector";
 import {
   applyAnthropicStyleStreamEvent,
-  applyAssistantBlocks,
-  applyUserToolResults,
+  applyAssistantUserResultBranches,
   extractPrefixedRecord,
   extractSessionTitle,
   type StreamStateMaps,
@@ -53,23 +52,23 @@ export function applyQwenRecordToState(
   streamState: QwenStreamStateMaps
 ): void {
   const { textByIndex, thinkingByIndex, toolByIndex, toolById } = streamState;
+  const blocks = record.message?.content ?? [];
   const sessionTitle = extractSessionTitle(record);
   if (sessionTitle) {
     state.sessionTitle = sessionTitle;
   }
 
-  if (record.type === "assistant") {
-    applyAssistantBlocks(state, record.message?.content ?? [], { toolById }, "qwen-tool");
-    return;
-  }
-
-  if (record.type === "user") {
-    applyUserToolResults(state, record.message?.content ?? [], { toolById });
-    return;
-  }
-
-  if (record.type === "result") {
-    state.phaseStatus = record.is_error ? "Qwen reported an error" : "Finalizing response";
+  if (applyAssistantUserResultBranches({
+    state,
+    blocks,
+    streamState: { toolById },
+    toolPrefix: "qwen-tool",
+    providerName: "Qwen",
+    isError: record.is_error,
+    assistant: record.type === "assistant",
+    user: record.type === "user",
+    result: record.type === "result",
+  })) {
     return;
   }
 
