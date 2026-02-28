@@ -17,48 +17,40 @@ const userSchema = z.object({
 
 export const agentProviderSchema = z.enum(AGENT_PROVIDERS);
 
-const agentsSchema = z.object({
-  opencode: z.object({
-    enabled: z.boolean().optional().default(true),
-    models: z.array(z.string()).optional().default([]),
-  }).optional().default({ enabled: true, models: [] }),
-  claudecode: z.object({
-    enabled: z.boolean().optional().default(true),
-  }).optional().default({ enabled: true }),
-  codex: z.object({
-    enabled: z.boolean().optional().default(true),
-    models: z.array(z.string()).optional().default([]),
-  }).optional().default({ enabled: true, models: [] }),
-  kimi: z.object({
-    enabled: z.boolean().optional().default(true),
-  }).optional().default({ enabled: true }),
-  kiro: z.object({
-    enabled: z.boolean().optional().default(true),
-  }).optional().default({ enabled: true }),
-  kilo: z.object({
-    enabled: z.boolean().optional().default(true),
-    models: z.array(z.string()).optional().default([]),
-  }).optional().default({ enabled: true, models: [] }),
-  qwen: z.object({
-    enabled: z.boolean().optional().default(true),
-  }).optional().default({ enabled: true }),
-  goose: z.object({
-    enabled: z.boolean().optional().default(true),
-  }).optional().default({ enabled: true }),
-  gemini: z.object({
-    enabled: z.boolean().optional().default(true),
-  }).optional().default({ enabled: true }),
-}).optional().default({
-  opencode: { enabled: true, models: [] },
-  claudecode: { enabled: true },
-  codex: { enabled: true, models: [] },
-  kimi: { enabled: true },
-  kiro: { enabled: true },
-  kilo: { enabled: true, models: [] },
-  qwen: { enabled: true },
-  goose: { enabled: true },
-  gemini: { enabled: true },
+const enabledAgentSchema = z.object({
+  enabled: z.boolean().optional().default(true),
 });
+
+const modelEnabledAgentSchema = enabledAgentSchema.extend({
+  models: z.array(z.string()).optional().default([]),
+});
+
+const createEnabledAgentDefault = () => ({ enabled: true });
+const createModelEnabledAgentDefault = () => ({ enabled: true, models: [] as string[] });
+
+const createDefaultAgentsConfig = () => ({
+  opencode: createModelEnabledAgentDefault(),
+  claudecode: createEnabledAgentDefault(),
+  codex: createModelEnabledAgentDefault(),
+  kimi: createEnabledAgentDefault(),
+  kiro: createEnabledAgentDefault(),
+  kilo: createModelEnabledAgentDefault(),
+  qwen: createEnabledAgentDefault(),
+  goose: createEnabledAgentDefault(),
+  gemini: createEnabledAgentDefault(),
+});
+
+const agentsSchema = z.object({
+  opencode: modelEnabledAgentSchema.optional().default(createModelEnabledAgentDefault()),
+  claudecode: enabledAgentSchema.optional().default(createEnabledAgentDefault()),
+  codex: modelEnabledAgentSchema.optional().default(createModelEnabledAgentDefault()),
+  kimi: enabledAgentSchema.optional().default(createEnabledAgentDefault()),
+  kiro: enabledAgentSchema.optional().default(createEnabledAgentDefault()),
+  kilo: modelEnabledAgentSchema.optional().default(createModelEnabledAgentDefault()),
+  qwen: enabledAgentSchema.optional().default(createEnabledAgentDefault()),
+  goose: enabledAgentSchema.optional().default(createEnabledAgentDefault()),
+  gemini: enabledAgentSchema.optional().default(createEnabledAgentDefault()),
+}).optional().default(createDefaultAgentsConfig());
 
 const channelDetailSchema = z.object({
   id: z.string(),

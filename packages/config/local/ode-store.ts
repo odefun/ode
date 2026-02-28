@@ -7,6 +7,10 @@ import {
   odeConfigSchema,
   type OdeConfig,
 } from "./ode-schema";
+import {
+  AGENT_PROVIDERS,
+  providerSupportsModelSelection,
+} from "@/shared/agent-provider";
 
 const existsSync = fs.existsSync;
 const mkdirSync = fs.mkdirSync;
@@ -26,6 +30,17 @@ const MIN_MESSAGE_UPDATE_INTERVAL_MS = 250;
 
 let cachedConfig: OdeConfig | null = null;
 
+function createDefaultAgentsConfig(): OdeConfig["agents"] {
+  return Object.fromEntries(
+    AGENT_PROVIDERS.map((provider) => [
+      provider,
+      providerSupportsModelSelection(provider)
+        ? { enabled: true, models: [] }
+        : { enabled: true },
+    ])
+  ) as unknown as OdeConfig["agents"];
+}
+
 const EMPTY_TEMPLATE: OdeConfig = {
   user: {
     name: "",
@@ -37,17 +52,7 @@ const EMPTY_TEMPLATE: OdeConfig = {
     IM_MESSAGE_UPDATE_INTERVAL_MS: DEFAULT_STATUS_MESSAGE_FREQUENCY_MS,
   },
   githubInfos: {},
-  agents: {
-    opencode: { enabled: true, models: [] },
-    claudecode: { enabled: true },
-    codex: { enabled: true, models: [] },
-    kimi: { enabled: true },
-    kiro: { enabled: true },
-    kilo: { enabled: true, models: [] },
-    qwen: { enabled: true },
-    goose: { enabled: true },
-    gemini: { enabled: true },
-  },
+  agents: createDefaultAgentsConfig(),
   completeOnboarding: false,
   workspaces: [],
   updates: {
@@ -55,6 +60,34 @@ const EMPTY_TEMPLATE: OdeConfig = {
     checkIntervalMs: DEFAULT_UPDATE_INTERVAL_MS,
   },
 };
+
+function normalizeModelList(models: unknown): string[] {
+  if (!Array.isArray(models)) return [];
+  return Array.from(new Set(models
+    .filter((model): model is string => typeof model === "string")
+    .map((model) => model.trim())
+    .filter(Boolean)));
+}
+
+function normalizeAgentsConfig(config: OdeConfig): OdeConfig["agents"] {
+  const agents = config.agents as Record<string, unknown>;
+  return Object.fromEntries(
+    AGENT_PROVIDERS.map((provider) => {
+      const providerConfig = (agents[provider] ?? {}) as Record<string, unknown>;
+      const enabled = providerConfig.enabled !== false;
+      if (!providerSupportsModelSelection(provider)) {
+        return [provider, { enabled }] as const;
+      }
+      return [
+        provider,
+        {
+          enabled,
+          models: normalizeModelList(providerConfig.models),
+        },
+      ] as const;
+    })
+  ) as unknown as OdeConfig["agents"];
+}
 
 function ensureConfigDir(): void {
   if (!existsSync(ODE_CONFIG_DIR)) {
@@ -88,15 +121,6 @@ function normalizeConfig(config: OdeConfig): OdeConfig {
       ? Math.max(intervalCandidate, MIN_UPDATE_INTERVAL_MS)
       : DEFAULT_UPDATE_INTERVAL_MS;
   const autoUpgrade = config.updates?.autoUpgrade ?? true;
-  const opencodeModels = Array.from(new Set((config.agents?.opencode?.models ?? [])
-    .map((model) => model.trim())
-    .filter(Boolean)));
-  const codexModels = Array.from(new Set((config.agents?.codex?.models ?? [])
-    .map((model) => model.trim())
-    .filter(Boolean)));
-  const kiloModels = Array.from(new Set((config.agents?.kilo?.models ?? [])
-    .map((model) => model.trim())
-    .filter(Boolean)));
   const completeOnboarding = config.completeOnboarding === true;
   const workspaces = config.workspaces.map((workspace) => ({
     ...workspace,
@@ -123,38 +147,7 @@ function normalizeConfig(config: OdeConfig): OdeConfig {
       autoUpgrade,
       checkIntervalMs: normalizedInterval,
     },
-    agents: {
-      opencode: {
-        enabled: config.agents?.opencode?.enabled ?? true,
-        models: opencodeModels,
-      },
-      claudecode: {
-        enabled: config.agents?.claudecode?.enabled ?? true,
-      },
-      codex: {
-        enabled: config.agents?.codex?.enabled ?? true,
-        models: codexModels,
-      },
-      kimi: {
-        enabled: config.agents?.kimi?.enabled ?? true,
-      },
-      kiro: {
-        enabled: config.agents?.kiro?.enabled ?? true,
-      },
-      kilo: {
-        enabled: config.agents?.kilo?.enabled ?? true,
-        models: kiloModels,
-      },
-      qwen: {
-        enabled: config.agents?.qwen?.enabled ?? true,
-      },
-      goose: {
-        enabled: config.agents?.goose?.enabled ?? true,
-      },
-      gemini: {
-        enabled: config.agents?.gemini?.enabled ?? true,
-      },
-    },
+    agents: normalizeAgentsConfig(config),
     completeOnboarding,
     workspaces,
   };

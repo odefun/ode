@@ -24,7 +24,11 @@ import {
   loadOdeConfig,
   updateOdeConfig,
 } from "./ode-store";
-import { AGENT_PROVIDERS } from "@/shared/agent-provider";
+import {
+  AGENT_PROVIDERS,
+  providerSupportsModelSelection,
+  type AgentProviderId,
+} from "@/shared/agent-provider";
 
 export type {
   ChannelDetail,
@@ -152,50 +156,43 @@ export function isAgentEnabled(agentProvider: AgentProvider): boolean {
 }
 
 export function getOpenCodeModels(): string[] {
-  return getAgentsConfig().opencode.models;
+  return getProviderModels("opencode");
 }
 
 export function setOpenCodeModels(models: string[]): void {
-  updateOdeConfig((config) => ({
-    ...config,
-    agents: {
-      ...config.agents,
-      opencode: {
-        ...config.agents.opencode,
-        models,
-      },
-    },
-  }));
+  setProviderModels("opencode", models);
 }
 
 export function getCodexModels(): string[] {
-  return getAgentsConfig().codex.models;
+  return getProviderModels("codex");
 }
 
 export function setCodexModels(models: string[]): void {
-  updateOdeConfig((config) => ({
-    ...config,
-    agents: {
-      ...config.agents,
-      codex: {
-        ...config.agents.codex,
-        models,
-      },
-    },
-  }));
+  setProviderModels("codex", models);
 }
 
 export function getKiloModels(): string[] {
-  return getAgentsConfig().kilo.models ?? [];
+  return getProviderModels("kilo");
 }
 
 export function setKiloModels(models: string[]): void {
+  setProviderModels("kilo", models);
+}
+
+function getProviderModels(provider: AgentProviderId): string[] {
+  if (!providerSupportsModelSelection(provider)) return [];
+  const providerConfig = getAgentsConfig()[provider] as { models?: string[] };
+  return providerConfig.models ?? [];
+}
+
+function setProviderModels(provider: AgentProviderId, models: string[]): void {
+  if (!providerSupportsModelSelection(provider)) return;
   updateOdeConfig((config) => ({
     ...config,
     agents: {
       ...config.agents,
-      kilo: {
-        ...config.agents.kilo,
+      [provider]: {
+        ...(config.agents[provider] as { enabled: boolean; models?: string[] }),
         models,
       },
     },

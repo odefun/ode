@@ -50,7 +50,7 @@ import {
   type GitStrategy,
 } from "@/config";
 import { startServer as startOpenCodeServer } from "@/agents/opencode";
-import { startServer as startCodexServer } from "@/agents/codex";
+import { startServer as startCodexServer } from "@/agents/codex/client";
 
 const SETTINGS_LAUNCH_ACTION = "open_settings_modal";
 const SETTINGS_MODAL_ID = "settings_modal";

@@ -1,12 +1,12 @@
-import * as claude from "./claude";
-import * as codex from "./codex";
-import * as kimi from "./kimi";
-import * as kiro from "./kiro";
-import * as kilo from "./kilo";
+import * as claude from "./claude/client";
+import * as codex from "./codex/client";
+import * as kimi from "./kimi/client";
+import * as kiro from "./kiro/client";
+import * as kilo from "./kilo/client";
 import * as opencode from "./opencode";
-import * as qwen from "./qwen";
-import * as goose from "./goose";
-import * as gemini from "./gemini";
+import * as qwen from "./qwen/client";
+import * as goose from "./goose/client";
+import * as gemini from "./gemini/client";
 import {
   AGENT_PROVIDERS,
   normalizeAgentProviderId,
