@@ -1,73 +1,8 @@
-import { getWebHost, getWebPort } from "@/config";
+import { uploadDiscordFile, uploadLarkFile, uploadSlackFile } from "@/ims";
+import { resolveChannel } from "./channel-resolver";
+import { parseFlags } from "./flags";
 
 type CliArgs = string[];
-
-type FlagSpec = Record<string, boolean>;
-
-function parseFlags(args: CliArgs, specs: FlagSpec): { flags: Record<string, string | boolean>; positional: string[] } {
-  const flags: Record<string, string | boolean> = {};
-  const positional: string[] = [];
-  for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i] ?? "";
-    if (arg.startsWith("--")) {
-      const eqIdx = arg.indexOf("=");
-      let name: string;
-      let value: string | undefined;
-      if (eqIdx >= 0) {
-        name = arg.slice(2, eqIdx);
-        value = arg.slice(eqIdx + 1);
-      } else {
-        name = arg.slice(2);
-      }
-      const takesValue = specs[name];
-      if (takesValue === undefined) {
-        throw new Error(`Unknown flag: --${name}`);
-      }
-      if (!takesValue) {
-        flags[name] = true;
-        continue;
-      }
-      if (value === undefined) {
-        const next = args[i + 1];
-        if (next === undefined || next.startsWith("--")) {
-          throw new Error(`Flag --${name} requires a value`);
-        }
-        value = next;
-        i += 1;
-      }
-      flags[name] = value;
-    } else {
-      positional.push(arg);
-    }
-  }
-  return { flags, positional };
-}
-
-function apiBase(): string {
-  return `http://${getWebHost()}:${getWebPort()}`;
-}
-
-type ApiResponse<T> = { ok?: boolean; error?: string; result?: T };
-
-async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const url = `${apiBase()}${path}`;
-  let response: Response;
-  try {
-    response = await fetch(url, init);
-  } catch (error) {
-    throw new Error(
-      `Failed to reach Ode daemon at ${url}. Is the daemon running? (Try \`ode status\` / \`ode start\`.) ${String(error)}`,
-    );
-  }
-  const payload = (await response.json().catch(() => ({}))) as ApiResponse<T>;
-  if (!response.ok || payload.ok === false) {
-    throw new Error(payload.error || `Request failed with status ${response.status}`);
-  }
-  if (payload.result === undefined) {
-    throw new Error("Empty response from Ode daemon");
-  }
-  return payload.result;
-}
 
 function printSendHelp(): void {
   console.log(
@@ -103,8 +38,8 @@ async function handleSendFile(args: CliArgs): Promise<void> {
   const channel = flags.channel as string | undefined;
   if (!channel) throw new Error("--channel is required");
 
-  // Resolve to absolute path so the daemon — which may run from a different
-  // cwd — can still find the file. Bun provides `path.resolve` via node:path.
+  // Resolve to absolute path so the SDK helpers find the file regardless of
+  // where the CLI was invoked from.
   const { resolve: resolvePath } = await import("path");
   const absolutePath = resolvePath(process.cwd(), filePath);
   const file = Bun.file(absolutePath);
@@ -112,21 +47,51 @@ async function handleSendFile(args: CliArgs): Promise<void> {
     throw new Error(`File not found: ${absolutePath}`);
   }
 
-  const body: Record<string, unknown> = {
-    channelId: channel,
-    filePath: absolutePath,
-  };
-  if (typeof flags.thread === "string") body.threadId = flags.thread;
-  if (typeof flags.filename === "string") body.filename = flags.filename;
-  if (typeof flags.title === "string") body.title = flags.title;
-  if (typeof flags.comment === "string") body.initialComment = flags.comment;
+  const threadId = typeof flags.thread === "string" ? flags.thread : undefined;
+  const filename = typeof flags.filename === "string" ? flags.filename : undefined;
+  const title = typeof flags.title === "string" ? flags.title : undefined;
+  const initialComment = typeof flags.comment === "string" ? flags.comment : undefined;
 
-  const result = await apiFetch<Record<string, unknown>>("/api/send/file", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
+  const resolved = resolveChannel(channel);
+
+  if (resolved.platform === "slack") {
+    const result = await uploadSlackFile({
+      botToken: resolved.botToken,
+      channelId: resolved.channelId,
+      threadId,
+      filePath: absolutePath,
+      filename,
+      title,
+      initialComment,
+    });
+    console.log(JSON.stringify({ platform: resolved.platform, ...result }, null, 2));
+    return;
+  }
+
+  if (resolved.platform === "discord") {
+    const result = await uploadDiscordFile({
+      botToken: resolved.botToken,
+      channelId: resolved.channelId,
+      filePath: absolutePath,
+      filename,
+      initialComment,
+    });
+    console.log(JSON.stringify({ platform: resolved.platform, ...result }, null, 2));
+    return;
+  }
+
+  // Lark
+  const result = await uploadLarkFile({
+    appId: resolved.appId,
+    appSecret: resolved.appSecret,
+    channelId: resolved.channelId,
+    threadId,
+    filePath: absolutePath,
+    filename,
+    title,
+    initialComment,
   });
-  console.log(JSON.stringify(result, null, 2));
+  console.log(JSON.stringify({ platform: resolved.platform, ...result }, null, 2));
 }
 
 export async function handleSendCommand(args: CliArgs): Promise<number> {

@@ -1,73 +1,8 @@
-import { getWebHost, getWebPort } from "@/config";
+import { addDiscordReaction, addLarkReaction, addSlackReaction } from "@/ims";
+import { resolveChannel } from "./channel-resolver";
+import { parseFlags } from "./flags";
 
 type CliArgs = string[];
-
-type FlagSpec = Record<string, boolean>;
-
-function parseFlags(args: CliArgs, specs: FlagSpec): { flags: Record<string, string | boolean>; positional: string[] } {
-  const flags: Record<string, string | boolean> = {};
-  const positional: string[] = [];
-  for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i] ?? "";
-    if (arg.startsWith("--")) {
-      const eqIdx = arg.indexOf("=");
-      let name: string;
-      let value: string | undefined;
-      if (eqIdx >= 0) {
-        name = arg.slice(2, eqIdx);
-        value = arg.slice(eqIdx + 1);
-      } else {
-        name = arg.slice(2);
-      }
-      const takesValue = specs[name];
-      if (takesValue === undefined) {
-        throw new Error(`Unknown flag: --${name}`);
-      }
-      if (!takesValue) {
-        flags[name] = true;
-        continue;
-      }
-      if (value === undefined) {
-        const next = args[i + 1];
-        if (next === undefined || next.startsWith("--")) {
-          throw new Error(`Flag --${name} requires a value`);
-        }
-        value = next;
-        i += 1;
-      }
-      flags[name] = value;
-    } else {
-      positional.push(arg);
-    }
-  }
-  return { flags, positional };
-}
-
-function apiBase(): string {
-  return `http://${getWebHost()}:${getWebPort()}`;
-}
-
-type ApiResponse<T> = { ok?: boolean; error?: string; result?: T };
-
-async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const url = `${apiBase()}${path}`;
-  let response: Response;
-  try {
-    response = await fetch(url, init);
-  } catch (error) {
-    throw new Error(
-      `Failed to reach Ode daemon at ${url}. Is the daemon running? (Try \`ode status\` / \`ode start\`.) ${String(error)}`,
-    );
-  }
-  const payload = (await response.json().catch(() => ({}))) as ApiResponse<T>;
-  if (!response.ok || payload.ok === false) {
-    throw new Error(payload.error || `Request failed with status ${response.status}`);
-  }
-  if (payload.result === undefined) {
-    throw new Error("Empty response from Ode daemon");
-  }
-  return payload.result;
-}
 
 function printReactionHelp(): void {
   console.log(
@@ -80,7 +15,7 @@ function printReactionHelp(): void {
       "Notes:",
       "  Supported --emoji values: thumbsup, eyes, ok_hand (aliases: thumbup, ok).",
       "  --channel accepts either a raw channel id or a \"workspaceId::channelId\" value.",
-      "  --thread is optional; Slack accepts it to scope the reaction to the right session.",
+      "  --thread is currently informational; reactions resolve to the message id directly.",
     ].join("\n"),
   );
 }
@@ -94,15 +29,36 @@ async function handleReactionAdd(args: CliArgs): Promise<void> {
   const emoji = flags.emoji as string | undefined;
   if (!emoji) throw new Error("--emoji is required");
 
-  const body: Record<string, unknown> = { channelId: channel, messageId, emoji };
-  if (typeof flags.thread === "string") body.threadId = flags.thread;
+  const resolved = resolveChannel(channel);
 
-  const result = await apiFetch<Record<string, unknown>>("/api/reactions", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  console.log(JSON.stringify(result, null, 2));
+  let payload: { platform: string } & Record<string, unknown>;
+  if (resolved.platform === "slack") {
+    const result = await addSlackReaction({
+      botToken: resolved.botToken,
+      channelId: resolved.channelId,
+      messageId,
+      emoji,
+    });
+    payload = { platform: resolved.platform, ...result };
+  } else if (resolved.platform === "discord") {
+    const result = await addDiscordReaction({
+      botToken: resolved.botToken,
+      channelId: resolved.channelId,
+      messageId,
+      emoji,
+    });
+    payload = { platform: resolved.platform, ...result };
+  } else {
+    const result = await addLarkReaction({
+      appId: resolved.appId,
+      appSecret: resolved.appSecret,
+      messageId,
+      emoji,
+    });
+    payload = { platform: resolved.platform, ...result };
+  }
+
+  console.log(JSON.stringify(payload, null, 2));
 }
 
 export async function handleReactionCommand(args: CliArgs): Promise<number> {

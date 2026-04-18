@@ -1,24 +1,21 @@
 import { basename } from "path";
-import { getApp, getSlackBotToken } from "./client";
+import { getApp } from "./client";
 import { hasSimpleOptions } from "@/core/runtime/helpers";
 
 // ---------------------------------------------------------------------------
 // Slack IM helper module.
 //
-// Historically this file hosted a generic `/api/action` dispatcher
-// (`handleSlackActionPayload`) that agents called via bash+curl. That
-// mechanism has been retired in favour of dedicated `ode <verb>` CLIs
-// (`ode send file`, `ode messages get`, `ode reaction add`, etc.), so this
-// module now only exposes:
+// Two kinds of exports live here:
 //
-//   - `postSlackQuestion`   – used by the core runtime to render SDK-emitted
-//                             question events in Slack.
-//   - `uploadSlackFile`     – powering `ode send file` on Slack channels.
-//   - `getSlackThreadMessages` – powering `ode messages get`.
-//   - `addSlackReaction`    – powering `ode reaction add`.
+//   1. `postSlackQuestion` — used by the core runtime (inside the daemon)
+//      to render SDK-emitted `question` events as Slack button messages. It
+//      needs `getApp().client` to share the Bolt-managed WebClient.
 //
-// The private helpers (`slackApiCall`, `slackFileUpload`, …) stay as
-// implementation details for those exports.
+//   2. `uploadSlackFile` / `getSlackThreadMessages` / `addSlackReaction` —
+//      thin wrappers around raw `https://slack.com/api/*` calls used by the
+//      `ode send file` / `ode messages get` / `ode reaction add` CLIs. These
+//      accept a bot token argument and use plain `fetch`, so they can run
+//      from the CLI process without requiring the Bolt App to be initialized.
 // ---------------------------------------------------------------------------
 
 function requireString(value: unknown, label: string): string {
@@ -205,6 +202,7 @@ async function slackFileUpload(
  * Powers the `ode send file` CLI.
  */
 export async function uploadSlackFile(args: {
+  botToken: string;
   channelId: string;
   threadId?: string;
   filePath: string;
@@ -212,12 +210,9 @@ export async function uploadSlackFile(args: {
   title?: string;
   initialComment?: string;
 }): Promise<{ status: "file_uploaded"; channelId: string; filename: string }> {
+  const token = requireString(args.botToken, "botToken");
   const channelId = requireString(args.channelId, "channelId");
   const filePath = requireString(args.filePath, "filePath");
-  const token = getSlackBotToken(channelId, typeof args.threadId === "string" ? args.threadId : undefined);
-  if (!token) {
-    throw new Error("No Slack bot token available for channel");
-  }
   const filename = args.filename || basename(filePath);
   await slackFileUpload({
     channelId,
@@ -231,46 +226,40 @@ export async function uploadSlackFile(args: {
 }
 
 /**
- * Fetch the messages of a Slack thread. Powers `ode messages get`.
+ * Fetch the replies of a Slack thread via `conversations.replies`. Powers
+ * `ode messages get`. Uses raw `fetch` so the CLI doesn't need a Bolt App.
  */
 export async function getSlackThreadMessages(args: {
+  botToken: string;
   channelId: string;
   threadId: string;
   limit?: number;
 }): Promise<{ messages: unknown[] }> {
+  const token = requireString(args.botToken, "botToken");
   const channelId = requireString(args.channelId, "channelId");
   const threadId = requireString(args.threadId, "threadId");
-  const token = getSlackBotToken(channelId, threadId);
-  if (!token) {
-    throw new Error("No Slack bot token available for channel");
-  }
-  const client = getApp().client;
-  const data = await client.conversations.replies({
+  const data = await slackApiCall("conversations.replies", {
     channel: channelId,
     ts: threadId,
     limit: args.limit ?? 20,
-    token,
-  });
-  return { messages: (data as { messages?: unknown[] }).messages ?? [] };
+  }, token) as { messages?: unknown[] };
+  return { messages: data.messages ?? [] };
 }
 
 /**
  * Add a reaction to a Slack message. Powers `ode reaction add`.
  */
 export async function addSlackReaction(args: {
+  botToken: string;
   channelId: string;
   messageId: string;
   emoji: string;
-  threadId?: string;
 }): Promise<{ status: "reaction_added" }> {
+  const token = requireString(args.botToken, "botToken");
   const channelId = requireString(args.channelId, "channelId");
   const messageId = requireString(args.messageId, "messageId");
   const emoji = requireString(args.emoji, "emoji");
   const name = normalizeSlackEmojiName(emoji);
-  const token = getSlackBotToken(channelId, args.threadId);
-  if (!token) {
-    throw new Error("No Slack bot token available for channel");
-  }
   await slackApiCall("reactions.add", {
     channel: channelId,
     timestamp: messageId,

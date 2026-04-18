@@ -1,73 +1,8 @@
-import { getWebHost, getWebPort } from "@/config";
+import { getDiscordThreadMessages, getLarkThreadMessages, getSlackThreadMessages } from "@/ims";
+import { resolveChannel } from "./channel-resolver";
+import { parseFlags } from "./flags";
 
 type CliArgs = string[];
-
-type FlagSpec = Record<string, boolean>;
-
-function parseFlags(args: CliArgs, specs: FlagSpec): { flags: Record<string, string | boolean>; positional: string[] } {
-  const flags: Record<string, string | boolean> = {};
-  const positional: string[] = [];
-  for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i] ?? "";
-    if (arg.startsWith("--")) {
-      const eqIdx = arg.indexOf("=");
-      let name: string;
-      let value: string | undefined;
-      if (eqIdx >= 0) {
-        name = arg.slice(2, eqIdx);
-        value = arg.slice(eqIdx + 1);
-      } else {
-        name = arg.slice(2);
-      }
-      const takesValue = specs[name];
-      if (takesValue === undefined) {
-        throw new Error(`Unknown flag: --${name}`);
-      }
-      if (!takesValue) {
-        flags[name] = true;
-        continue;
-      }
-      if (value === undefined) {
-        const next = args[i + 1];
-        if (next === undefined || next.startsWith("--")) {
-          throw new Error(`Flag --${name} requires a value`);
-        }
-        value = next;
-        i += 1;
-      }
-      flags[name] = value;
-    } else {
-      positional.push(arg);
-    }
-  }
-  return { flags, positional };
-}
-
-function apiBase(): string {
-  return `http://${getWebHost()}:${getWebPort()}`;
-}
-
-type ApiResponse<T> = { ok?: boolean; error?: string; result?: T };
-
-async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const url = `${apiBase()}${path}`;
-  let response: Response;
-  try {
-    response = await fetch(url, init);
-  } catch (error) {
-    throw new Error(
-      `Failed to reach Ode daemon at ${url}. Is the daemon running? (Try \`ode status\` / \`ode start\`.) ${String(error)}`,
-    );
-  }
-  const payload = (await response.json().catch(() => ({}))) as ApiResponse<T>;
-  if (!response.ok || payload.ok === false) {
-    throw new Error(payload.error || `Request failed with status ${response.status}`);
-  }
-  if (payload.result === undefined) {
-    throw new Error("Empty response from Ode daemon");
-  }
-  return payload.result;
-}
 
 function printMessagesHelp(): void {
   console.log(
@@ -98,21 +33,43 @@ async function handleMessagesGet(args: CliArgs): Promise<void> {
     throw new Error("--limit must be a positive number");
   }
 
-  const body: Record<string, unknown> = { channelId: channel, threadId };
-  if (limit !== undefined) body.limit = limit;
+  const resolved = resolveChannel(channel);
 
-  const result = await apiFetch<{ platform: string; messages: unknown[] }>("/api/messages/thread", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  let payload: { platform: string; messages: unknown[] };
+  if (resolved.platform === "slack") {
+    const result = await getSlackThreadMessages({
+      botToken: resolved.botToken,
+      channelId: resolved.channelId,
+      threadId,
+      limit,
+    });
+    payload = { platform: resolved.platform, messages: result.messages };
+  } else if (resolved.platform === "discord") {
+    const result = await getDiscordThreadMessages({
+      botToken: resolved.botToken,
+      channelId: resolved.channelId,
+      threadId,
+      limit,
+    });
+    payload = { platform: resolved.platform, messages: result.messages };
+  } else {
+    const result = await getLarkThreadMessages({
+      appId: resolved.appId,
+      appSecret: resolved.appSecret,
+      channelId: resolved.channelId,
+      threadId,
+      limit,
+    });
+    payload = { platform: resolved.platform, messages: result.messages };
+  }
+
   if (flags.json) {
-    console.log(JSON.stringify(result, null, 2));
+    console.log(JSON.stringify(payload, null, 2));
     return;
   }
-  console.log(`platform: ${result.platform}  count: ${result.messages.length}`);
+  console.log(`platform: ${payload.platform}  count: ${payload.messages.length}`);
   console.log("--- messages ---");
-  console.log(JSON.stringify(result.messages, null, 2));
+  console.log(JSON.stringify(payload.messages, null, 2));
 }
 
 export async function handleMessagesCommand(args: CliArgs): Promise<number> {

@@ -61,8 +61,8 @@ Ode is a Slack bot that bridges messages to OpenCode for AI-assisted coding.
 - Useful acks: `eyes` = "I'm on it", `thumbsup` = "done", `ok_hand` = "acknowledged".
 
 ## Platform APIs
-- Ode no longer exposes a generic `/api/action` bridge; agents must use the dedicated `ode <verb>` CLIs above instead of calling Slack/Discord/Lark APIs directly.
-- Adding a new platform-facing capability means adding (or extending) an `ode` subcommand plus a matching daemon route.
+- Ode does not expose an HTTP bridge for chat actions; agents interact with the chat platform exclusively through the `ode <verb>` CLIs above (they resolve Slack / Discord / Lark credentials locally from the Ode config).
+- Adding a new platform-facing capability means adding (or extending) an `ode` subcommand that drives the relevant `@/ims/*` helper directly.
 
 ## Bun conventions
 - Use Bun instead of Node.js
