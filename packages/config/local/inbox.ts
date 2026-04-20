@@ -50,6 +50,8 @@ export interface MessageThreadSummary {
   sourceKind: MessageThreadSourceKind;
   cronJobId: string | null;
   cronJobTitle: string | null;
+  taskId: string | null;
+  taskTitle: string | null;
   detailCount: number;
   firstMessageAt: number;
   lastMessageAt: number;
@@ -120,6 +122,8 @@ export interface EnsureMessageThreadParams {
   sourceKind?: MessageThreadSourceKind;
   cronJobId?: string | null;
   cronJobTitle?: string | null;
+  taskId?: string | null;
+  taskTitle?: string | null;
   context?: Record<string, unknown> | null;
 }
 
@@ -208,6 +212,8 @@ type ThreadRow = {
   source_kind: MessageThreadSourceKind;
   cron_job_id: string | null;
   cron_job_title: string | null;
+  task_id: string | null;
+  task_title: string | null;
   context_json: string | null;
   detail_count: number;
   first_message_at: number;
@@ -295,6 +301,8 @@ function initializeDatabase(db: Database): void {
       source_kind           TEXT NOT NULL DEFAULT 'user',
       cron_job_id           TEXT,
       cron_job_title        TEXT,
+      task_id               TEXT,
+      task_title            TEXT,
       context_json          TEXT,
       detail_count          INTEGER NOT NULL DEFAULT 0,
       first_message_at      INTEGER NOT NULL,
@@ -333,6 +341,18 @@ function initializeDatabase(db: Database): void {
   db.exec("CREATE INDEX IF NOT EXISTS idx_message_detail_thread_seq ON message_detail(thread_id, seq);");
   db.exec("CREATE INDEX IF NOT EXISTS idx_message_detail_question ON message_detail(question_source_id);");
   db.exec("CREATE INDEX IF NOT EXISTS idx_message_detail_status ON message_detail(status);");
+
+  // Lightweight migrations for DBs created before the columns existed.
+  // sqlite's `ALTER TABLE ... ADD COLUMN` is idempotent-friendly if we first
+  // check PRAGMA table_info, which avoids throwing on repeated startup.
+  ensureThreadColumn(db, "task_id", "TEXT");
+  ensureThreadColumn(db, "task_title", "TEXT");
+}
+
+function ensureThreadColumn(db: Database, column: string, type: string): void {
+  const rows = db.query(`PRAGMA table_info(message_thread)`).all() as Array<{ name: string }>;
+  if (rows.some((row) => row.name === column)) return;
+  db.exec(`ALTER TABLE message_thread ADD COLUMN ${column} ${type};`);
 }
 
 function getDatabase(): Database {
@@ -500,6 +520,8 @@ function mapThreadSummaryRow(
     sourceKind: row.source_kind,
     cronJobId: row.cron_job_id,
     cronJobTitle: row.cron_job_title,
+    taskId: row.task_id,
+    taskTitle: row.task_title,
     detailCount: row.detail_count,
     firstMessageAt: row.first_message_at,
     lastMessageAt: row.last_message_at,
@@ -576,6 +598,7 @@ export function ensureMessageThread(params: EnsureMessageThreadParams): string {
        session_id, provider_id, model, working_directory,
        thread_owner_user_id, branch_name,
        source_kind, cron_job_id, cron_job_title,
+       task_id, task_title,
        context_json,
        detail_count,
        first_message_at, last_message_at,
@@ -588,6 +611,7 @@ export function ensureMessageThread(params: EnsureMessageThreadParams): string {
        ?, ?, ?, ?,
        ?, ?,
        ?, ?, ?,
+       ?, ?,
        ?,
        0,
        ?, ?,
@@ -611,6 +635,8 @@ export function ensureMessageThread(params: EnsureMessageThreadParams): string {
        source_kind          = excluded.source_kind,
        cron_job_id          = COALESCE(excluded.cron_job_id, message_thread.cron_job_id),
        cron_job_title       = COALESCE(excluded.cron_job_title, message_thread.cron_job_title),
+       task_id              = COALESCE(excluded.task_id, message_thread.task_id),
+       task_title           = COALESCE(excluded.task_title, message_thread.task_title),
        context_json         = COALESCE(excluded.context_json, message_thread.context_json),
        updated_at           = excluded.updated_at
     `
@@ -633,6 +659,8 @@ export function ensureMessageThread(params: EnsureMessageThreadParams): string {
     sourceKind,
     params.cronJobId ?? null,
     params.cronJobTitle ?? null,
+    params.taskId ?? null,
+    params.taskTitle ?? null,
     toJsonText(params.context ?? null),
     now,
     now,

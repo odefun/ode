@@ -314,6 +314,8 @@ async function runTask(task: TaskRecord): Promise<void> {
         threadOwnerUserId: session.threadOwnerUserId ?? getTaskUserId(task.id),
         branchName: session.branchName,
         sourceKind: "task",
+        taskId: task.id,
+        taskTitle: task.title,
         context: {
           sourceKind: "task",
           taskId: task.id,

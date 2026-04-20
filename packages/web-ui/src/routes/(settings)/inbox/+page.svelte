@@ -5,7 +5,7 @@
   import { Badge, Button, Card } from "$lib/components/ui";
   import { locale } from "$lib/i18n";
 
-  type ThreadSourceKind = "user" | "cron_job";
+  type ThreadSourceKind = "user" | "cron_job" | "task";
 
   type MessageThreadSummary = {
     id: string;
@@ -26,6 +26,8 @@
     sourceKind: ThreadSourceKind;
     cronJobId: string | null;
     cronJobTitle: string | null;
+    taskId: string | null;
+    taskTitle: string | null;
     detailCount: number;
     firstMessageAt: number;
     lastMessageAt: number;
@@ -73,6 +75,11 @@
       return thread.cronJobTitle
         ? `${t("Cron Job", "定时任务")}: ${thread.cronJobTitle}`
         : t("Cron Job", "定时任务");
+    }
+    if (thread.sourceKind === "task") {
+      return thread.taskTitle
+        ? `${t("One-time Task", "一次性任务")}: ${thread.taskTitle}`
+        : t("One-time Task", "一次性任务");
     }
     return t("User Thread", "用户会话");
   }

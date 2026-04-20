@@ -119,6 +119,37 @@ describe("local inbox store", () => {
     expect(detail?.cronJobTitle).toBe("Morning Sync");
   });
 
+  it("records one-time task source metadata at the thread level", () => {
+    const threadKey = buildThreadKey("C-task", "task:task-42");
+    ensureMessageThread({
+      platform: "slack",
+      channelId: "C-task",
+      threadId: "task:task-42",
+      replyThreadId: "task:task-42",
+      sourceKind: "task",
+      taskId: "task-42",
+      taskTitle: "Check deploy status after 1h",
+    });
+    recordUserPrompt({
+      threadKey,
+      messageId: "1234",
+      userId: "task:task-42",
+      promptText: "ping deploy status",
+    });
+
+    const detail = getMessageThreadById(threadKey);
+    expect(detail).not.toBeNull();
+    expect(detail?.sourceKind).toBe("task");
+    expect(detail?.taskId).toBe("task-42");
+    expect(detail?.taskTitle).toBe("Check deploy status after 1h");
+
+    const page = getMessageThreadPage({ page: 1, pageSize: 10 });
+    const summary = page.items.find((item) => item.id === threadKey);
+    expect(summary?.sourceKind).toBe("task");
+    expect(summary?.taskId).toBe("task-42");
+    expect(summary?.taskTitle).toBe("Check deploy status after 1h");
+  });
+
   it("captures a full question → reply → answer batch timeline", () => {
     const threadKey = buildThreadKey("C-q", "T-q");
     ensureMessageThread({

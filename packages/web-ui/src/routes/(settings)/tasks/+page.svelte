@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Ban, CalendarClock, Pencil, Play, Plus, RefreshCw, Trash2 } from "lucide-svelte";
+  import { Ban, CalendarClock, ChevronDown, ChevronRight, Pencil, Play, Plus, RefreshCw, Trash2 } from "lucide-svelte";
   import { Badge, Button, Card, Input, Label, Select, Textarea } from "$lib/components/ui";
   import { locale } from "$lib/i18n";
   import {
@@ -65,6 +65,8 @@
   let formScheduledLocal = $state("");
   let formRunImmediately = $state(false);
   let runningTaskIds = $state<Set<string>>(new Set());
+  // Create/edit form is collapsible, collapsed by default. Auto-expands when editing.
+  let isCreateFormOpen = $state(false);
 
   function isProviderEnabled(provider: AgentProviderId): boolean {
     const agents = $localSettingStore.config.agents as Record<string, { enabled?: boolean }>;
@@ -161,6 +163,7 @@
     formScheduledLocal = toLocalDatetimeInput(task.scheduledAt);
     formRunImmediately = false;
     message = "";
+    isCreateFormOpen = true;
     if (typeof window !== "undefined") {
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
@@ -346,16 +349,27 @@
 </script>
 
 <Card className="p-5">
-  <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
-    <div class="flex items-center gap-2">
-      <CalendarClock class="h-4 w-4 text-[hsl(var(--muted-foreground))]" />
-      <h2 class="text-lg font-semibold">{t("One-time Tasks", "一次性任务")}</h2>
+  <div class="mb-4 flex flex-wrap items-start justify-between gap-3">
+    <div class="flex items-start gap-2">
+      <CalendarClock class="mt-1 h-4 w-4 text-[hsl(var(--muted-foreground))]" />
+      <div class="space-y-1">
+        <h2 class="text-lg font-semibold">{t("One-time Tasks", "一次性任务")}</h2>
+        <p class="text-xs text-[hsl(var(--muted-foreground))]">
+          {t(
+            "Most one-time tasks are created by agents themselves; you can also create them manually. Agents schedule one-time tasks to defer an operation, or to hand work off to a sub-agent.",
+            "一次性任务大多是由 Agent 自己创建的，你也可以手动创建一次性任务。这些 Agent 可以通过创建一次性任务，来延后执行某个操作，或者调用其他的 sub-agent。",
+          )}
+        </p>
+      </div>
     </div>
 
     <div class="flex items-center gap-2">
       <Button
         variant="outline"
-        on:click={resetForm}
+        on:click={() => {
+          resetForm();
+          isCreateFormOpen = true;
+        }}
         disabled={isSaving}
       >
         <Plus class="h-4 w-4" />
@@ -373,21 +387,36 @@
   </div>
 
   <div class="space-y-6">
-    <!-- Create / edit form -->
+    <!-- Create / edit form (collapsible, collapsed by default) -->
     <div class="rounded-lg border p-4">
-      <div class="mb-4">
-        <p class="text-sm font-medium">
-          {editingTaskId ? t("Edit Task", "编辑任务") : t("Create Task", "创建任务")}
-        </p>
-        <p class="mt-1 text-xs text-[hsl(var(--muted-foreground))]">
-          {t(
-            "Tasks fire once at the scheduled time. When a thread is set, the task reuses that thread's session to keep context; otherwise it posts as a fresh channel message.",
-            "任务会在设定的时间一次性触发。如填写 Thread，则会复用该 Thread 的会话保留上下文；否则作为新的频道消息发送。",
-          )}
-        </p>
-      </div>
+      <button
+        type="button"
+        class="flex w-full items-center justify-between gap-2 text-left"
+        onclick={() => {
+          isCreateFormOpen = !isCreateFormOpen;
+        }}
+        aria-expanded={isCreateFormOpen}
+      >
+        <div>
+          <p class="text-sm font-medium">
+            {editingTaskId ? t("Edit Task", "编辑任务") : t("Create Task", "创建任务")}
+          </p>
+          <p class="mt-1 text-xs text-[hsl(var(--muted-foreground))]">
+            {t(
+              "Tasks fire once at the scheduled time. When a thread is set, the task reuses that thread's session to keep context; otherwise it posts as a fresh channel message.",
+              "任务会在设定的时间一次性触发。如填写 Thread，则会复用该 Thread 的会话保留上下文；否则作为新的频道消息发送。",
+            )}
+          </p>
+        </div>
+        {#if isCreateFormOpen}
+          <ChevronDown class="h-4 w-4 shrink-0 text-[hsl(var(--muted-foreground))]" />
+        {:else}
+          <ChevronRight class="h-4 w-4 shrink-0 text-[hsl(var(--muted-foreground))]" />
+        {/if}
+      </button>
 
-      <div class="space-y-4">
+      {#if isCreateFormOpen}
+        <div class="mt-4 space-y-4">
         <div class="space-y-2">
           <Label for="task-title">{t("Title", "标题")}</Label>
           <Input
@@ -522,6 +551,7 @@
           {/if}
         </div>
       </div>
+      {/if}
     </div>
 
     <!-- Task list -->
