@@ -400,6 +400,29 @@ export function markCronJobTriggered(id: string, minuteStartMs: number): boolean
   return result.changes > 0;
 }
 
+/**
+ * Flag a cron job as actively running for manual/immediate invocations that
+ * bypass the minute-level idempotency guard in `markCronJobTriggered`.
+ *
+ * Scheduler polls rely on the `last_triggered_at < ?` guard to dedupe runs
+ * within the same minute, but a user clicking "Run now" should not be blocked
+ * by that guard. We still want the row's `last_run_status` to reflect the
+ * in-flight run so the UI and any recovery logic can observe it truthfully,
+ * hence this unconditional update.
+ */
+export function markCronJobRunning(id: string, triggeredAtMs: number): void {
+  const db = getDatabase();
+  db.query(`
+    UPDATE cron_jobs
+    SET
+      last_triggered_at = ?,
+      last_run_status = 'running',
+      last_error = NULL,
+      updated_at = ?
+    WHERE id = ?
+  `).run(triggeredAtMs, Date.now(), id);
+}
+
 export function markCronJobCompleted(id: string): void {
   const db = getDatabase();
   const now = Date.now();

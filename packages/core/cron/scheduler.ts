@@ -13,6 +13,7 @@ import {
   listEnabledCronJobs,
   markCronJobCompleted,
   markCronJobFailed,
+  markCronJobRunning,
   markCronJobTriggered,
 } from "@/config/local/cron-jobs";
 import {
@@ -38,6 +39,61 @@ import { sendChannelMessage as sendSlackChannelMessage } from "@/ims/slack/clien
 import { log } from "@/utils";
 
 const CRON_POLL_INTERVAL_MS = 15_000;
+
+/**
+ * Hard upper bound for a cron run's session-preparation phase (creating the
+ * agent session + setting up a worktree). If this step hangs — e.g. the
+ * OpenCode SDK call never returns, or a `git worktree add` stalls — the run
+ * would otherwise occupy the in-process `runningJobIds` guard indefinitely,
+ * blocking every subsequent manual "Run now" with HTTP 409. We time it out so
+ * the job flips to `failed` and users can retry.
+ */
+const CRON_PREPARE_TIMEOUT_MS = parsePositiveIntEnv(
+  process.env.ODE_CRON_PREPARE_TIMEOUT_MS,
+  2 * 60_000
+);
+
+/**
+ * Hard upper bound for the actual agent turn (`agent.sendMessage`). OpenCode
+ * sessions can wedge waiting on approvals or remote provider calls; we bound
+ * the run so a stuck turn doesn't permanently lock out the job.
+ */
+const CRON_AGENT_TIMEOUT_MS = parsePositiveIntEnv(
+  process.env.ODE_CRON_AGENT_TIMEOUT_MS,
+  30 * 60_000
+);
+
+function parsePositiveIntEnv(raw: string | undefined, fallback: number): number {
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return parsed;
+}
+
+class CronStepTimeoutError extends Error {
+  constructor(step: string, timeoutMs: number) {
+    super(`${step} timed out after ${timeoutMs}ms`);
+    this.name = "CronStepTimeoutError";
+  }
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, step: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new CronStepTimeoutError(step, timeoutMs));
+    }, timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
 
 let cronSchedulerTimer: ReturnType<typeof setInterval> | null = null;
 const runningJobIds = new Set<string>();
@@ -217,7 +273,11 @@ async function runCronJob(job: CronJobRecord, minuteStartMs: number): Promise<vo
   let agentResultDetailId: string | null = null;
 
   try {
-    const { session, sessionId, cwd } = await prepareCronSession(job, runId);
+    const { session, sessionId, cwd } = await withTimeout(
+      prepareCronSession(job, runId),
+      CRON_PREPARE_TIMEOUT_MS,
+      "Cron session preparation"
+    );
     const providerId = agent.getProviderForSession(sessionId);
     const options = buildMessageOptions({
       text: job.messageText,
@@ -275,13 +335,17 @@ async function runCronJob(job: CronJobRecord, minuteStartMs: number): Promise<vo
       });
     }
 
-    const responses = await agent.sendMessage(
-      job.channelId,
-      sessionId,
-      job.messageText,
-      cwd,
-      options,
-      buildCronAgentContext(job, runId)
+    const responses = await withTimeout(
+      agent.sendMessage(
+        job.channelId,
+        sessionId,
+        job.messageText,
+        cwd,
+        options,
+        buildCronAgentContext(job, runId)
+      ),
+      CRON_AGENT_TIMEOUT_MS,
+      "Cron agent turn"
     );
     const finalText = buildFinalResponseText(responses) ?? "_Done_";
 
@@ -337,6 +401,18 @@ async function runCronJob(job: CronJobRecord, minuteStartMs: number): Promise<vo
       channelId: job.channelId,
       error: String(error),
     });
+    // Surface the failure to the chat channel so users aren't left staring
+    // at a silent "running" row. Any error here is best-effort; we never
+    // want the notification path to shadow the original failure.
+    try {
+      const failureText = `*Cron job failed:* ${job.title}\n${message}`;
+      await sendResultToChannel(job, failureText);
+    } catch (notifyError) {
+      log.warn("Failed to send cron job failure notification", {
+        cronJobId: job.id,
+        error: String(notifyError),
+      });
+    }
   }
 }
 
@@ -443,6 +519,18 @@ export function beginTriggerCronJobNow(jobId: string): Promise<void> {
   }
 
   runningJobIds.add(job.id);
+  // Reflect the in-flight manual run in SQL so the UI and any recovery logic
+  // can observe it. The minute-level idempotency guard in
+  // `markCronJobTriggered` is intentionally not used here — manual runs must
+  // be possible within the same minute as a scheduler run.
+  try {
+    markCronJobRunning(job.id, Date.now());
+  } catch (error) {
+    log.warn("Failed to mark cron job as running before manual trigger", {
+      cronJobId: job.id,
+      error: String(error),
+    });
+  }
   const runPromise = runCronJob(job, Date.now()).finally(() => {
     runningJobIds.delete(job.id);
   });
