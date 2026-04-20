@@ -450,6 +450,109 @@ export function markCronJobFailed(id: string, errorMessage: string): void {
   `).run(errorMessage, now, id);
 }
 
+// ---------------------------------------------------------------------------
+// Runtime interruption recovery.
+//
+// Same concern as `tasks.reconcileInterruptedTasks`: a cron run killed
+// mid-flight by SIGTERM / upgrade restart / crash leaves `last_run_status`
+// stuck at `running`. `reconcileInterruptedCronJobs` is called on scheduler
+// startup to clear those zombies and (per product decision) optionally
+// backfill the most recent run so a fresh restart doesn't silently drop
+// time-sensitive work like a heartbeat or a just-missed daily digest.
+// ---------------------------------------------------------------------------
+
+/**
+ * If `last_triggered_at` (the minute-start that was about to run) is within
+ * this window, reconcile classifies the interrupted run as "backfillable"
+ * and flags the job for an immediate single re-run. Beyond the window we
+ * only clear the zombie status — the next scheduled tick takes over, which
+ * matches cron's usual "missed = missed" semantics.
+ *
+ * Default 10 min mirrors `tasks.TASK_RECENT_STALENESS_WINDOW_MS` so the two
+ * code paths behave predictably together.
+ */
+export const CRON_BACKFILL_WINDOW_MS = 10 * 60_000;
+
+export type CronReconcileAction = "backfill_scheduled" | "failed_stale";
+
+export type CronReconcileEntry = {
+  id: string;
+  title: string;
+  action: CronReconcileAction;
+  lastTriggeredAt: number | null;
+};
+
+/**
+ * Reconcile cron jobs whose `last_run_status='running'` was left behind by
+ * a previous runtime. Returns per-row summaries so callers can log them and
+ * drive the optional backfill step.
+ *
+ *   last_triggered_at within CRON_BACKFILL_WINDOW_MS -> status back to
+ *                                                       `failed`, caller
+ *                                                       should re-trigger.
+ *   otherwise                                        -> status to `failed`
+ *                                                       (no backfill).
+ *
+ * We mark the zombie as `failed` in both cases because the previous run
+ * genuinely did not complete. The caller (the scheduler) is responsible for
+ * issuing the backfill re-run separately via `beginTriggerCronJobNow`. That
+ * split keeps the storage layer pure SQL and lets the scheduler decide
+ * whether it's safe to spawn a run on boot (e.g. it could suppress backfills
+ * during integration tests).
+ */
+export function reconcileInterruptedCronJobs(
+  nowMs: number = Date.now(),
+): CronReconcileEntry[] {
+  const db = getDatabase();
+  const rows = db
+    .query("SELECT * FROM cron_jobs WHERE last_run_status = 'running'")
+    .all() as CronJobRow[];
+
+  const entries: CronReconcileEntry[] = [];
+  const clearStmt = db.query(`
+    UPDATE cron_jobs
+    SET
+      last_run_status = 'failed',
+      last_error = ?,
+      updated_at = ?
+    WHERE id = ? AND last_run_status = 'running'
+  `);
+
+  for (const row of rows) {
+    const job = mapRow(row);
+    const triggeredAt = job.lastTriggeredAt;
+    const isBackfillable =
+      triggeredAt !== null && nowMs - triggeredAt <= CRON_BACKFILL_WINDOW_MS;
+
+    if (isBackfillable) {
+      clearStmt.run(
+        "runtime_interrupted (scheduling backfill)",
+        nowMs,
+        job.id,
+      );
+      entries.push({
+        id: job.id,
+        title: job.title,
+        action: "backfill_scheduled",
+        lastTriggeredAt: triggeredAt,
+      });
+    } else {
+      clearStmt.run(
+        "runtime_interrupted (missed window; next tick will run)",
+        nowMs,
+        job.id,
+      );
+      entries.push({
+        id: job.id,
+        title: job.title,
+        action: "failed_stale",
+        lastTriggeredAt: triggeredAt,
+      });
+    }
+  }
+  return entries;
+}
+
 export function clearCronJobsForTests(): void {
   const db = getDatabase();
   db.exec("DELETE FROM cron_jobs;");

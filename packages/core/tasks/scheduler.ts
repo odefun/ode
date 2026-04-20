@@ -15,6 +15,7 @@ import {
   markTaskCompleted,
   markTaskFailed,
   markTaskTriggered,
+  reconcileInterruptedTasks,
 } from "@/config/local/tasks";
 import {
   buildThreadKey,
@@ -55,6 +56,64 @@ import { log } from "@/utils";
 // ---------------------------------------------------------------------------
 
 const TASK_POLL_INTERVAL_MS = 10_000;
+
+/**
+ * Hard upper bound for a task's session-preparation phase (creating the
+ * agent session + setting up a worktree). Mirrors
+ * `CRON_PREPARE_TIMEOUT_MS`: if this step hangs (SDK call never returns, or
+ * `git worktree add` stalls) the run would otherwise occupy the in-process
+ * `runningTaskIds` guard indefinitely. Bounding it lets the row flip to
+ * `failed` so users can retry or the next reconcile pass can resurrect it.
+ */
+const TASK_PREPARE_TIMEOUT_MS = parsePositiveIntEnv(
+  process.env.ODE_TASK_PREPARE_TIMEOUT_MS,
+  2 * 60_000,
+);
+
+/**
+ * Hard upper bound for the actual agent turn (`agent.sendMessage`). OpenCode
+ * sessions can wedge waiting on approvals or remote provider calls; we bound
+ * the run so a stuck turn doesn't permanently lock out the task row. Matches
+ * the cron default (2h) — tasks tend to be heavier since they often do
+ * scripted long-running work, but anything longer than 2h should really be
+ * split into multiple scheduled runs.
+ */
+const TASK_AGENT_TIMEOUT_MS = parsePositiveIntEnv(
+  process.env.ODE_TASK_AGENT_TIMEOUT_MS,
+  2 * 60 * 60_000,
+);
+
+function parsePositiveIntEnv(raw: string | undefined, fallback: number): number {
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return parsed;
+}
+
+class TaskStepTimeoutError extends Error {
+  constructor(step: string, timeoutMs: number) {
+    super(`${step} timed out after ${timeoutMs}ms`);
+    this.name = "TaskStepTimeoutError";
+  }
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, step: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new TaskStepTimeoutError(step, timeoutMs));
+    }, timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
 
 let taskSchedulerTimer: ReturnType<typeof setInterval> | null = null;
 const runningTaskIds = new Set<string>();
@@ -291,7 +350,11 @@ async function runTask(task: TaskRecord): Promise<void> {
   let threadKey: string | null = null;
 
   try {
-    const { session, sessionId, cwd, threadId } = await prepareTaskSession(task);
+    const { session, sessionId, cwd, threadId } = await withTimeout(
+      prepareTaskSession(task),
+      TASK_PREPARE_TIMEOUT_MS,
+      "Task session preparation",
+    );
     threadKey = buildThreadKey(task.channelId, threadId);
     const providerId = agent.getProviderForSession(sessionId);
     const options = buildMessageOptions({
@@ -352,13 +415,17 @@ async function runTask(task: TaskRecord): Promise<void> {
       });
     }
 
-    const responses = await agent.sendMessage(
-      task.channelId,
-      sessionId,
-      task.messageText,
-      cwd,
-      options,
-      buildTaskAgentContext(task),
+    const responses = await withTimeout(
+      agent.sendMessage(
+        task.channelId,
+        sessionId,
+        task.messageText,
+        cwd,
+        options,
+        buildTaskAgentContext(task),
+      ),
+      TASK_AGENT_TIMEOUT_MS,
+      "Task agent turn",
     );
     const finalText = buildFinalResponseText(responses) ?? "_Done_";
 
@@ -440,6 +507,25 @@ async function tickTasks(): Promise<void> {
 
 export function startTaskScheduler(): void {
   if (taskSchedulerTimer) return;
+  // Before the polling loop starts, reconcile any rows left stuck in
+  // `status='running'` from a previous runtime (SIGTERM during upgrade,
+  // crash, OOM, etc.). Staleness-based classification lives in the storage
+  // layer; we just log the outcome so it shows up in daemon.log.
+  try {
+    const reconciled = reconcileInterruptedTasks();
+    if (reconciled.length > 0) {
+      log.info("Reconciled interrupted tasks from previous runtime", {
+        count: reconciled.length,
+        entries: reconciled,
+      });
+    }
+  } catch (error) {
+    // Reconciliation is best-effort; a corrupted DB or schema mismatch
+    // should not prevent the scheduler from ticking.
+    log.warn("Failed to reconcile interrupted tasks on startup", {
+      error: String(error),
+    });
+  }
   void tickTasks();
   taskSchedulerTimer = setInterval(() => {
     void tickTasks();

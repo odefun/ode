@@ -15,6 +15,9 @@ import {
   markTaskCompleted,
   markTaskFailed,
   markTaskTriggered,
+  MAX_TASK_AUTO_RETRIES,
+  reconcileInterruptedTasks,
+  TASK_RECENT_STALENESS_WINDOW_MS,
   updateTask,
 } from "./tasks";
 
@@ -186,18 +189,29 @@ describe("tasks storage", () => {
     expect(getTaskById(b.id)?.lastError).toBe("boom");
   });
 
-  test("cancelTask only cancels pending tasks", () => {
+  test("cancelTask also rescues running tasks stuck after a crash", () => {
+    // Pending -> cancelled is the usual happy path.
     const task = createTask({ title: "c", scheduledAt: Date.now() + 60_000, channelId: "C_TEST", messageText: "hi" });
     expect(cancelTask(task.id)).toBe(true);
     expect(getTaskById(task.id)?.status).toBe("cancelled");
     // Second cancel is a no-op.
     expect(cancelTask(task.id)).toBe(false);
 
-    // Cannot cancel a running or completed task.
+    // Running tasks are also cancellable: a runtime crash can leave a row
+    // in `running` forever, and `cancelTask` now lets the user reclaim it
+    // via the UI / CLI without having to `delete` the row outright.
     const running = createTask({ title: "r", scheduledAt: Date.now(), channelId: "C_TEST", messageText: "r" });
     markTaskTriggered(running.id);
-    expect(cancelTask(running.id)).toBe(false);
-    expect(getTaskById(running.id)?.status).toBe("running");
+    expect(cancelTask(running.id)).toBe(true);
+    expect(getTaskById(running.id)?.status).toBe("cancelled");
+    expect(getTaskById(running.id)?.completedAt).not.toBeNull();
+
+    // Terminal rows (success / failed / already cancelled) stay put.
+    const done = createTask({ title: "d", scheduledAt: Date.now(), channelId: "C_TEST", messageText: "d" });
+    markTaskTriggered(done.id);
+    markTaskCompleted(done.id);
+    expect(cancelTask(done.id)).toBe(false);
+    expect(getTaskById(done.id)?.status).toBe("success");
   });
 
   test("updateTask rejects edits on non-pending tasks", () => {
@@ -287,5 +301,139 @@ describe("tasks storage", () => {
     });
     expect(() => updateTask(task.id, { agent: "claude-code-beta" })).toThrow(/Unsupported agent/);
     expect(getTaskById(task.id)?.agent).toBe("opencode");
+  });
+});
+
+describe("reconcileInterruptedTasks", () => {
+  test("requeues a recently triggered running task and bumps retry_count", () => {
+    const now = Date.now();
+    const task = createTask({
+      title: "recent",
+      scheduledAt: now - 30_000, // 30s ago — well within the staleness window
+      channelId: "C_TEST",
+      messageText: "go",
+    });
+    markTaskTriggered(task.id);
+    expect(getTaskById(task.id)?.status).toBe("running");
+
+    const entries = reconcileInterruptedTasks(now);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      id: task.id,
+      action: "requeued",
+      retryCount: 1,
+    });
+
+    const after = getTaskById(task.id)!;
+    expect(after.status).toBe("pending");
+    expect(after.triggeredAt).toBeNull();
+    expect(after.retryCount).toBe(1);
+    expect(after.lastError).toMatch(/runtime_interrupted/);
+  });
+
+  test("requeues future-scheduled tasks regardless of absolute elapsed time", () => {
+    // A task whose scheduledAt is still in the future should always be
+    // re-queued: the restart happened before its intended firing time, so
+    // the user's original intent is untouched.
+    const now = Date.now();
+    const task = createTask({
+      title: "future",
+      scheduledAt: now + 60 * 60_000, // one hour from now
+      channelId: "C_TEST",
+      messageText: "later",
+    });
+    markTaskTriggered(task.id);
+
+    const entries = reconcileInterruptedTasks(now);
+    expect(entries[0]?.action).toBe("requeued");
+    expect(getTaskById(task.id)?.status).toBe("pending");
+  });
+
+  test("fails a stale interrupted task outside the staleness window", () => {
+    const now = Date.now();
+    const task = createTask({
+      title: "stale",
+      scheduledAt: now - (TASK_RECENT_STALENESS_WINDOW_MS + 60_000),
+      channelId: "C_TEST",
+      messageText: "too late",
+    });
+    markTaskTriggered(task.id);
+
+    const entries = reconcileInterruptedTasks(now);
+    expect(entries[0]).toMatchObject({
+      id: task.id,
+      action: "failed_stale",
+      retryCount: 0,
+    });
+    const after = getTaskById(task.id)!;
+    expect(after.status).toBe("failed");
+    expect(after.retryCount).toBe(0);
+    expect(after.lastError).toMatch(/too stale/);
+    expect(after.completedAt).not.toBeNull();
+  });
+
+  test("enforces MAX_TASK_AUTO_RETRIES to prevent crash loops", () => {
+    // A task that already bounced MAX times must terminate, even if it's
+    // otherwise fresh — we assume something about it is crashing the runtime.
+    const now = Date.now();
+    const task = createTask({
+      title: "looping",
+      scheduledAt: now - 30_000,
+      channelId: "C_TEST",
+      messageText: "crash me",
+    });
+    markTaskTriggered(task.id);
+    // Pretend the previous reconcile already bumped retry_count to the cap.
+    // We reach into the DB directly because there's no public API for
+    // setting retryCount (it's only incremented by reconcile itself).
+    const dbFile = process.env.ODE_INBOX_DB_FILE!;
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { Database } = require("bun:sqlite") as typeof import("bun:sqlite");
+    const rawDb = new Database(dbFile);
+    rawDb.query("UPDATE tasks SET retry_count = ? WHERE id = ?").run(
+      MAX_TASK_AUTO_RETRIES,
+      task.id,
+    );
+    rawDb.close();
+
+    const entries = reconcileInterruptedTasks(now);
+    expect(entries[0]).toMatchObject({
+      id: task.id,
+      action: "failed_retry_cap",
+      retryCount: MAX_TASK_AUTO_RETRIES,
+    });
+    expect(getTaskById(task.id)?.status).toBe("failed");
+    expect(getTaskById(task.id)?.lastError).toMatch(/retry cap/);
+  });
+
+  test("leaves non-running tasks alone (pending / success / failed / cancelled)", () => {
+    const now = Date.now();
+    const pending = createTask({ title: "p", scheduledAt: now - 1000, channelId: "C_TEST", messageText: "p" });
+    const done = createTask({ title: "d", scheduledAt: now - 1000, channelId: "C_TEST", messageText: "d" });
+    markTaskTriggered(done.id);
+    markTaskCompleted(done.id);
+    const cancelled = createTask({ title: "c", scheduledAt: now + 60_000, channelId: "C_TEST", messageText: "c" });
+    cancelTask(cancelled.id);
+
+    const entries = reconcileInterruptedTasks(now);
+    expect(entries).toHaveLength(0);
+    expect(getTaskById(pending.id)?.status).toBe("pending");
+    expect(getTaskById(done.id)?.status).toBe("success");
+    expect(getTaskById(cancelled.id)?.status).toBe("cancelled");
+  });
+
+  test("is idempotent: a second run is a no-op once rows are terminal", () => {
+    const now = Date.now();
+    const fresh = createTask({ title: "f", scheduledAt: now - 30_000, channelId: "C_TEST", messageText: "f" });
+    const stale = createTask({ title: "s", scheduledAt: now - (TASK_RECENT_STALENESS_WINDOW_MS + 60_000), channelId: "C_TEST", messageText: "s" });
+    markTaskTriggered(fresh.id);
+    markTaskTriggered(stale.id);
+
+    const first = reconcileInterruptedTasks(now);
+    expect(first).toHaveLength(2);
+    const second = reconcileInterruptedTasks(now);
+    // Fresh task was re-queued to pending; stale task is terminal. Neither
+    // is still `running`, so the second pass has nothing to do.
+    expect(second).toHaveLength(0);
   });
 });

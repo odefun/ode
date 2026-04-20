@@ -15,6 +15,7 @@ import {
   markCronJobFailed,
   markCronJobRunning,
   markCronJobTriggered,
+  reconcileInterruptedCronJobs,
 } from "@/config/local/cron-jobs";
 import {
   buildThreadKey,
@@ -455,6 +456,44 @@ async function tickCronJobs(): Promise<void> {
 
 export function startCronJobScheduler(): void {
   if (cronSchedulerTimer) return;
+  // Reconcile rows left in `last_run_status='running'` by a previous
+  // runtime. Any row whose `last_triggered_at` is fresh enough gets a
+  // backfill re-run kicked off synchronously (via the usual `beginTriggerX`
+  // code path) so time-sensitive jobs don't silently skip a cycle when the
+  // daemon restarts for an upgrade.
+  try {
+    const reconciled = reconcileInterruptedCronJobs();
+    if (reconciled.length > 0) {
+      log.info("Reconciled interrupted cron jobs from previous runtime", {
+        count: reconciled.length,
+        entries: reconciled,
+      });
+      for (const entry of reconciled) {
+        if (entry.action !== "backfill_scheduled") continue;
+        // Fire-and-forget: `beginTriggerCronJobNow` returns a detached
+        // promise for the agent turn, we just want it kicked off. Errors
+        // are already logged inside `runCronJob`.
+        try {
+          const promise = beginTriggerCronJobNow(entry.id);
+          promise.catch((error) => {
+            log.warn("Cron backfill run failed", {
+              cronJobId: entry.id,
+              error: String(error),
+            });
+          });
+        } catch (error) {
+          log.warn("Failed to start cron backfill run", {
+            cronJobId: entry.id,
+            error: String(error),
+          });
+        }
+      }
+    }
+  } catch (error) {
+    log.warn("Failed to reconcile interrupted cron jobs on startup", {
+      error: String(error),
+    });
+  }
   void tickCronJobs();
   cronSchedulerTimer = setInterval(() => {
     void tickCronJobs();

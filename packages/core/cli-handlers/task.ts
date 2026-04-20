@@ -119,6 +119,9 @@ function printTaskDetail(task: TaskRecord): void {
   console.log(`completedAt:   ${formatTimestamp(task.completedAt)}`);
   console.log(`createdAt:     ${formatTimestamp(task.createdAt)}`);
   console.log(`updatedAt:     ${formatTimestamp(task.updatedAt)}`);
+  if (task.retryCount > 0) {
+    console.log(`retryCount:    ${task.retryCount}`);
+  }
   if (task.lastError) {
     console.log(`lastError:     ${task.lastError}`);
   }

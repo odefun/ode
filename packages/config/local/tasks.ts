@@ -49,6 +49,14 @@ export type TaskRecord = {
   lastError: string | null;
   triggeredAt: number | null;
   completedAt: number | null;
+  /**
+   * Number of times this task has been auto-retried after a runtime
+   * interruption (SIGTERM / crash / upgrade restart). Bumped by
+   * `reconcileInterruptedTasks` when it resurrects a still-actionable task.
+   * Capped at `MAX_TASK_AUTO_RETRIES` to prevent crash loops from spamming
+   * chat channels.
+   */
+  retryCount: number;
   createdAt: number;
   updatedAt: number;
 };
@@ -97,6 +105,7 @@ type TaskRow = {
   last_error: string | null;
   triggered_at: number | null;
   completed_at: number | null;
+  retry_count: number;
   created_at: number;
   updated_at: number;
 };
@@ -143,10 +152,20 @@ function initializeDatabase(db: Database): void {
       last_error TEXT,
       triggered_at INTEGER,
       completed_at INTEGER,
+      retry_count INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
   `);
+  // Idempotent migration: add `retry_count` to databases created before the
+  // column existed. SQLite has no `IF NOT EXISTS` for ALTER TABLE, so we peek
+  // at PRAGMA first.
+  const hasRetryCount = (db
+    .query("PRAGMA table_info(tasks);")
+    .all() as Array<{ name: string }>).some((col) => col.name === "retry_count");
+  if (!hasRetryCount) {
+    db.exec("ALTER TABLE tasks ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0;");
+  }
   db.exec("CREATE INDEX IF NOT EXISTS idx_tasks_status_scheduled ON tasks(status, scheduled_at);");
   db.exec("CREATE INDEX IF NOT EXISTS idx_tasks_channel ON tasks(channel_id, scheduled_at DESC);");
 }
@@ -189,6 +208,7 @@ function mapRow(row: TaskRow): TaskRecord {
     lastError: row.last_error,
     triggeredAt: row.triggered_at,
     completedAt: row.completed_at,
+    retryCount: row.retry_count ?? 0,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -498,9 +518,17 @@ export function markTaskFailed(id: string, errorMessage: string): void {
 }
 
 /**
- * Cancel a pending task. Returns true if the task was cancellable (was
- * pending). Returns false if the task was already running / finished /
- * cancelled / missing — callers can treat that as a no-op.
+ * Cancel a task. Returns true if the task moved to `cancelled` state.
+ *
+ * Accepts both `pending` and `running` tasks:
+ *   - `pending` tasks stop before they fire.
+ *   - `running` tasks let users reclaim a row stuck in `running` after a
+ *     runtime crash / SIGTERM. The in-process agent turn (if still alive) is
+ *     NOT torn down by this call — it's a DB-level bookkeeping op. The next
+ *     reconcile pass will see the row is already terminal and leave it alone.
+ *
+ * Returns false for already-terminal rows (`success` / `failed` / `cancelled`)
+ * or missing ids — callers should treat that as a no-op.
  */
 export function cancelTask(id: string): boolean {
   const db = getDatabase();
@@ -509,10 +537,145 @@ export function cancelTask(id: string): boolean {
     UPDATE tasks
     SET
       status = 'cancelled',
+      completed_at = ?,
       updated_at = ?
-    WHERE id = ? AND status = 'pending'
-  `).run(now, id);
+    WHERE id = ? AND status IN ('pending', 'running')
+  `).run(now, now, id);
   return result.changes > 0;
+}
+
+// ---------------------------------------------------------------------------
+// Runtime interruption recovery.
+//
+// When the runtime is killed while a task is mid-flight (upgrade restart,
+// SIGTERM, OS crash, OOM), the row stays `status='running'` forever because
+// the SIGTERM handler doesn't await in-flight runs and there's no heartbeat
+// column. `reconcileInterruptedTasks` is called on scheduler startup to
+// resurrect or retire those zombies based on staleness + retry budget.
+// ---------------------------------------------------------------------------
+
+/**
+ * Maximum number of auto-retries per task. Once `retry_count` reaches this
+ * number the next reconcile pass will terminate the task as `failed` instead
+ * of putting it back in `pending`. Guards against crash loops — if a task
+ * reliably takes the runtime down, we stop re-arming the foot-gun.
+ *
+ * Matches the product decision in the rollout discussion: one automatic
+ * retry after a restart, then hand off to the human.
+ */
+export const MAX_TASK_AUTO_RETRIES = 1;
+
+/**
+ * Grace window for deciding whether an interrupted task is still fresh
+ * enough to auto-retry. A task whose `scheduledAt` is more than this far
+ * in the past is considered stale — the user may have already worked
+ * around the failure, the scheduled moment may no longer be meaningful
+ * (e.g. "post daily digest at 9am" is useless at 11am), and a silent
+ * replay could produce duplicate side effects (messages, comments, PRs).
+ *
+ * 10 minutes mirrors the window in `packages/core/kernel/recovery.ts`
+ * for chat-session activeRequest recovery.
+ */
+export const TASK_RECENT_STALENESS_WINDOW_MS = 10 * 60_000;
+
+export type TaskReconcileAction = "requeued" | "failed_stale" | "failed_retry_cap";
+
+export type TaskReconcileEntry = {
+  id: string;
+  title: string;
+  action: TaskReconcileAction;
+  retryCount: number;
+};
+
+/**
+ * Reconcile tasks that were left stuck in `status='running'` by a previous
+ * runtime. Classifies each zombie row and updates it in-place; returns a
+ * per-row summary so callers can log / emit metrics.
+ *
+ * Decision table:
+ *
+ *   retry_count already >= MAX_TASK_AUTO_RETRIES     -> `failed` (retry cap)
+ *   scheduled_at in the future                       -> `pending`, bump retry
+ *   scheduled_at within TASK_RECENT_STALENESS_WINDOW -> `pending`, bump retry
+ *   scheduled_at further in the past                 -> `failed` (stale)
+ *
+ * Callers should invoke this ONCE on scheduler startup, before the polling
+ * loop starts. Safe to call multiple times (idempotent on terminal rows).
+ */
+export function reconcileInterruptedTasks(nowMs: number = Date.now()): TaskReconcileEntry[] {
+  const db = getDatabase();
+  const rows = db
+    .query("SELECT * FROM tasks WHERE status = 'running'")
+    .all() as TaskRow[];
+
+  const entries: TaskReconcileEntry[] = [];
+  const requeueStmt = db.query(`
+    UPDATE tasks
+    SET
+      status = 'pending',
+      triggered_at = NULL,
+      last_error = ?,
+      retry_count = retry_count + 1,
+      updated_at = ?
+    WHERE id = ? AND status = 'running'
+  `);
+  const failStmt = db.query(`
+    UPDATE tasks
+    SET
+      status = 'failed',
+      last_error = ?,
+      completed_at = ?,
+      updated_at = ?
+    WHERE id = ? AND status = 'running'
+  `);
+
+  for (const row of rows) {
+    const task = mapRow(row);
+
+    if (task.retryCount >= MAX_TASK_AUTO_RETRIES) {
+      failStmt.run(
+        "runtime_interrupted (retry cap reached)",
+        nowMs,
+        nowMs,
+        task.id,
+      );
+      entries.push({
+        id: task.id,
+        title: task.title,
+        action: "failed_retry_cap",
+        retryCount: task.retryCount,
+      });
+      continue;
+    }
+
+    const isFresh =
+      task.scheduledAt > nowMs ||
+      nowMs - task.scheduledAt <= TASK_RECENT_STALENESS_WINDOW_MS;
+
+    if (isFresh) {
+      requeueStmt.run("runtime_interrupted (auto-retrying)", nowMs, task.id);
+      entries.push({
+        id: task.id,
+        title: task.title,
+        action: "requeued",
+        retryCount: task.retryCount + 1,
+      });
+    } else {
+      failStmt.run(
+        "runtime_interrupted (scheduled time too stale to auto-retry)",
+        nowMs,
+        nowMs,
+        task.id,
+      );
+      entries.push({
+        id: task.id,
+        title: task.title,
+        action: "failed_stale",
+        retryCount: task.retryCount,
+      });
+    }
+  }
+  return entries;
 }
 
 export function clearTasksForTests(): void {

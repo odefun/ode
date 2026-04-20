@@ -201,9 +201,11 @@ export function registerTaskRoutes(app: Elysia): void {
         if (!existing) throw new Error("Task not found");
         const cancelled = cancelTask(id);
         if (!cancelled) {
-          // Either already cancelled / completed / running. Surface the
-          // current status so the UI can show a sensible message.
-          throw new Error(`Task is not pending (status: ${existing.status})`);
+          // Row is already terminal (cancelled / success / failed). Surface
+          // the current status so the UI can show a sensible message. Note
+          // that `running` is now cancellable alongside `pending`; this
+          // branch is only for irrecoverable terminal states.
+          throw new Error(`Task cannot be cancelled (status: ${existing.status})`);
         }
         return {
           task: getTaskById(id),
@@ -217,7 +219,7 @@ export function registerTaskRoutes(app: Elysia): void {
         resolveStatus: (message) => {
           if (message === "Missing task id") return 400;
           if (message === "Task not found") return 404;
-          if (message.startsWith("Task is not pending")) return 409;
+          if (message.startsWith("Task cannot be cancelled")) return 409;
           return 500;
         },
       },

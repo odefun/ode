@@ -62,6 +62,7 @@ function makeTask(overrides: Partial<TaskRecord> = {}): TaskRecord {
     lastError: null,
     triggeredAt: null,
     completedAt: null,
+    retryCount: 0,
     createdAt: Date.now(),
     updatedAt: Date.now(),
     ...overrides,
