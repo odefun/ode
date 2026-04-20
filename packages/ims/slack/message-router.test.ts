@@ -17,6 +17,7 @@ function createDeps(overrides: Partial<Parameters<typeof registerSlackMessageRou
     isThreadOwner: () => false,
     isThreadActive: () => false,
     postGeneralSettingsLauncher: async () => {},
+    postCronLauncher: async () => {},
     describeSettingsIssues: () => [],
     handleInboundEvent,
     ...overrides,

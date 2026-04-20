@@ -50,6 +50,17 @@ import {
   type GitStrategy,
 } from "@/config";
 import { refreshSettingsProviderData } from "@/ims/shared/settings-provider-data";
+import {
+  CRON_RUN_NOW_ACTION,
+  CRON_VIEW_DETAILS_ACTION,
+  buildCronJobDetailBlocks,
+  getCronJobForChannel,
+} from "./cron";
+import {
+  CronJobAlreadyRunningError,
+  CronJobNotFoundError,
+  beginTriggerCronJobNow,
+} from "@/core/cron/scheduler";
 
 const SETTINGS_LAUNCH_ACTION = "open_settings_modal";
 const SETTINGS_MODAL_ID = "settings_modal";
@@ -851,6 +862,88 @@ export function setupInteractiveHandlers(): void {
     if (selectionMsg.ts) {
       await handleButtonSelection(channel, threadTs, userId || "unknown", value, selectionMsg.ts);
     }
+    });
+
+    slackApp.action(CRON_VIEW_DETAILS_ACTION, async ({ ack, body, client }) => {
+      await ack();
+      const actionBody = body as SlackActionBody;
+      const jobId = actionBody.actions?.[0]?.value;
+      const channelId = actionBody.channel?.id;
+      const userId = getActionUserId(actionBody);
+      if (!jobId || !channelId || !userId) return;
+
+      const job = getCronJobForChannel(channelId, jobId);
+      if (!job) {
+        await client.chat.postEphemeral({
+          channel: channelId,
+          user: userId,
+          text: `Cron job \`${jobId}\` not found in this channel.`,
+        });
+        return;
+      }
+
+      await client.chat.postEphemeral({
+        channel: channelId,
+        user: userId,
+        text: `Cron job: ${job.title}`,
+        blocks: buildCronJobDetailBlocks(job),
+      });
+    });
+
+    slackApp.action(CRON_RUN_NOW_ACTION, async ({ ack, body, client }) => {
+      await ack();
+      const actionBody = body as SlackActionBody;
+      const jobId = actionBody.actions?.[0]?.value;
+      const channelId = actionBody.channel?.id;
+      const userId = getActionUserId(actionBody);
+      if (!jobId || !channelId || !userId) return;
+
+      const job = getCronJobForChannel(channelId, jobId);
+      if (!job) {
+        await client.chat.postEphemeral({
+          channel: channelId,
+          user: userId,
+          text: `Cron job \`${jobId}\` not found in this channel.`,
+        });
+        return;
+      }
+
+      try {
+        const runPromise = beginTriggerCronJobNow(job.id);
+        runPromise.catch((error) => {
+          console.warn("Manually triggered cron job run failed", {
+            cronJobId: job.id,
+            error: String(error),
+          });
+        });
+        await client.chat.postEphemeral({
+          channel: channelId,
+          user: userId,
+          text: `▶️ Triggered cron job *${job.title}* (\`${job.id}\`). It will run in the background.`,
+        });
+      } catch (error) {
+        if (error instanceof CronJobAlreadyRunningError) {
+          await client.chat.postEphemeral({
+            channel: channelId,
+            user: userId,
+            text: `⏳ Cron job *${job.title}* is already running.`,
+          });
+          return;
+        }
+        if (error instanceof CronJobNotFoundError) {
+          await client.chat.postEphemeral({
+            channel: channelId,
+            user: userId,
+            text: `Cron job \`${job.id}\` was not found.`,
+          });
+          return;
+        }
+        await client.chat.postEphemeral({
+          channel: channelId,
+          user: userId,
+          text: `Failed to trigger cron job: ${error instanceof Error ? error.message : String(error)}`,
+        });
+      }
     });
   }
 }

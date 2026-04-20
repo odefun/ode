@@ -9,7 +9,7 @@ export type IncomingFlowResult =
   | { type: "stop"; text: string }
   | { type: "forward"; text: string };
 
-export type IncomingCommand = "setting" | "stats";
+export type IncomingCommand = "setting" | "stats" | "cron";
 
 export function formatIncomingDropMessage(reason: IncomingIgnoreReason): string {
   switch (reason) {
@@ -32,5 +32,6 @@ export function parseIncomingCommand(text: string): IncomingCommand | null {
     .toLowerCase();
   if (/^\/?settings?\b/.test(normalized)) return "setting";
   if (/^\/?(?:debug\s+)?stats\b/.test(normalized)) return "stats";
+  if (/^\/?crons?\b/.test(normalized)) return "cron";
   return null;
 }

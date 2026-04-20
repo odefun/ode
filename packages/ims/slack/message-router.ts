@@ -32,6 +32,7 @@ type RouterDeps = {
   isThreadOwner: (channelId: string, threadId: string, userId: string) => boolean;
   isThreadActive: (channelId: string, threadId: string, botId: string) => boolean;
   postGeneralSettingsLauncher: (channelId: string, userId: string, client: any) => Promise<void>;
+  postCronLauncher: (channelId: string, userId: string, client: any) => Promise<void>;
   describeSettingsIssues: (channelId: string) => string[];
   handleInboundEvent: (event: RawInboundEvent) => Promise<void>;
 };
@@ -201,6 +202,23 @@ async function maybeHandleLauncherCommand(params: {
       await handleStatsCommand({ channelId, threadId, say });
     } else {
       log.debug("Slack stats command ignored because bot was not mentioned", {
+        channelId,
+        userId,
+        cleanText,
+      });
+    }
+    return true;
+  }
+  if (command === "cron") {
+    if (isMention) {
+      log.info("Slack cron launcher command matched", {
+        channelId,
+        userId,
+        cleanText,
+      });
+      await deps.postCronLauncher(channelId, userId, client);
+    } else {
+      log.debug("Slack cron command ignored because bot was not mentioned", {
         channelId,
         userId,
         cleanText,

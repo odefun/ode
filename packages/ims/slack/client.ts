@@ -22,6 +22,7 @@ import { fetchThreadHistoryByClient } from "./message-history";
 import { registerSlackMessageRouter } from "./message-router";
 import { syncSlackWorkspace } from "@/core/web/local-settings";
 import { describeSlackSettingsIssues, postSlackGeneralSettingsLauncher } from "./settings";
+import { postSlackChannelCronLauncher } from "./cron";
 import {
   createProcessorId,
 } from "@/ims/shared/processor-id";
@@ -708,6 +709,7 @@ export function setupMessageHandlers(): void {
       },
       isThreadActive,
       postGeneralSettingsLauncher: postSlackGeneralSettingsLauncher,
+      postCronLauncher: postSlackChannelCronLauncher,
       describeSettingsIssues: describeSlackSettingsIssues,
       handleInboundEvent: async (event) => {
         const rawChannelId = event.rawChannelId ?? event.channelId;
