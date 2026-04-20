@@ -89,11 +89,12 @@ describe("runtime helpers", () => {
       expect(hasSimpleOptions([])).toBe(false);
     });
 
-    it("rejects labels longer than 15 characters", () => {
-      expect(hasSimpleOptions(["short", "this label is definitely way too long"])).toBe(false);
-      // 15 is allowed; 16 is not.
-      expect(hasSimpleOptions(["abcdefghijklmno", "ok"])).toBe(true);
-      expect(hasSimpleOptions(["abcdefghijklmnop", "ok"])).toBe(false);
+    it("rejects labels longer than 75 characters", () => {
+      // 75 is allowed; 76 is not (Slack button text hard limit is 75).
+      expect(hasSimpleOptions(["short", "a".repeat(75)])).toBe(true);
+      expect(hasSimpleOptions(["short", "a".repeat(76)])).toBe(false);
+      // Realistic medium-length labels (previously rejected at 15) now pass.
+      expect(hasSimpleOptions(["Push to PR 98", "Leave uncommitted", "Commit but don't push"])).toBe(true);
     });
 
     it("rejects labels containing newlines", () => {

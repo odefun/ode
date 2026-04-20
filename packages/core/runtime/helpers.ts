@@ -118,9 +118,9 @@ export function buildQuestionAnswers(answers: string[]): Array<Array<string>> {
 
 /**
  * Heuristic for rendering a question's options as interactive UI (e.g. Slack
- * buttons) rather than plain "a / b / c" text. Conservative so we only promote
- * to buttons when labels are short enough to fit comfortably and the count is
- * within Slack's actions-block comfort zone.
+ * buttons) rather than plain "a / b / c" text. We promote to buttons whenever
+ * each option fits within Slack's native button-text limit (75 chars) and the
+ * count stays within Slack's actions-block comfort zone.
  */
 export function hasSimpleOptions(options: readonly string[] | undefined): boolean {
   if (!options) return false;
@@ -128,7 +128,7 @@ export function hasSimpleOptions(options: readonly string[] | undefined): boolea
   for (const opt of options) {
     const trimmed = opt?.trim?.();
     if (!trimmed) return false;
-    if (trimmed.length > 15) return false;
+    if (trimmed.length > 75) return false;
     if (/[\r\n]/.test(trimmed)) return false;
   }
   return true;

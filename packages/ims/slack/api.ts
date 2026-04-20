@@ -65,6 +65,11 @@ function normalizeOptionLabel(option: unknown): string {
  * the user can tap a choice. Otherwise — including when there are no options
  * at all — we fall back to a plain text message listing the choices inline.
  *
+ * If Slack rejects the Block Kit payload (e.g. `invalid_blocks` because a
+ * button label still exceeds Slack's 75-char hard limit, or some other
+ * schema error), we catch the error, log it, and fall back to the same
+ * plain-text format so the user still sees the question.
+ *
  * Used by the runtime's `sendQuestion` path (SDK-emitted `question` events).
  */
 export async function postSlackQuestion(args: {
@@ -84,6 +89,17 @@ export async function postSlackQuestion(args: {
   const displayPrefix = prefix ?? "";
   const questionText = `${displayPrefix}${question}`;
 
+  const postPlainText = async (): Promise<string | undefined> => {
+    const optionText = options.length > 0 ? `\nOptions: ${options.join(" / ")}` : "";
+    const result = await client.chat.postMessage({
+      channel: channelId,
+      thread_ts: threadId,
+      text: `${questionText}${optionText}`,
+      token,
+    });
+    return result.ts ?? undefined;
+  };
+
   if (hasSimpleOptions(options)) {
     const buttons = options.map((opt, i) => ({
       type: "button" as const,
@@ -92,34 +108,38 @@ export async function postSlackQuestion(args: {
       value: opt,
     }));
 
-    const result = await client.chat.postMessage({
-      channel: channelId,
-      thread_ts: threadId,
-      text: questionText,
-      blocks: [
-        {
-          type: "section",
-          text: { type: "mrkdwn", text: questionText },
-        },
-        {
-          type: "actions",
-          block_id: "user_choice",
-          elements: buttons,
-        },
-      ],
-      token,
-    });
-    return result.ts ?? undefined;
+    try {
+      const result = await client.chat.postMessage({
+        channel: channelId,
+        thread_ts: threadId,
+        text: questionText,
+        blocks: [
+          {
+            type: "section",
+            text: { type: "mrkdwn", text: questionText },
+          },
+          {
+            type: "actions",
+            block_id: "user_choice",
+            elements: buttons,
+          },
+        ],
+        token,
+      });
+      return result.ts ?? undefined;
+    } catch (err) {
+      // Slack rejected the Block Kit payload (invalid_blocks, etc.). Log the
+      // underlying reason and fall back to the plain-text format so the user
+      // still sees the question rather than silently losing it.
+      const data = (err as { data?: { error?: string; errors?: string[] } } | undefined)?.data;
+      const slackError = data?.error ?? (err as Error | undefined)?.message ?? "unknown";
+      const details = Array.isArray(data?.errors) ? ` (${data?.errors?.join("; ")})` : "";
+      console.warn(`[slack] postSlackQuestion buttons rejected (${slackError})${details}; falling back to plain text`);
+      return postPlainText();
+    }
   }
 
-  const optionText = options.length > 0 ? `\nOptions: ${options.join(" / ")}` : "";
-  const result = await client.chat.postMessage({
-    channel: channelId,
-    thread_ts: threadId,
-    text: `${questionText}${optionText}`,
-    token,
-  });
-  return result.ts ?? undefined;
+  return postPlainText();
 }
 
 async function slackApiCall(method: string, body: Record<string, unknown>, token: string): Promise<unknown> {
