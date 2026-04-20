@@ -150,6 +150,78 @@ describe("local inbox store", () => {
     expect(summary?.taskTitle).toBe("Check deploy status after 1h");
   });
 
+  it("preserves task/cron source_kind when a later ensureMessageThread call defaults to user", () => {
+    // Simulates the bug where a synthetic task thread was later re-ensured
+    // through a path (e.g. runtime-facade) that hardcodes sourceKind: "user".
+    const taskThreadKey = buildThreadKey("C-preserve", "task:task-99");
+    ensureMessageThread({
+      platform: "slack",
+      channelId: "C-preserve",
+      threadId: "task:task-99",
+      replyThreadId: "task:task-99",
+      sourceKind: "task",
+      taskId: "task-99",
+      taskTitle: "do the thing later",
+    });
+
+    // Second call without explicit sourceKind (defaults to "user") must NOT
+    // clobber the more specific "task" source already persisted.
+    ensureMessageThread({
+      platform: "slack",
+      channelId: "C-preserve",
+      threadId: "task:task-99",
+      replyThreadId: "task:task-99",
+    });
+
+    const taskDetail = getMessageThreadById(taskThreadKey);
+    expect(taskDetail?.sourceKind).toBe("task");
+    expect(taskDetail?.taskId).toBe("task-99");
+    expect(taskDetail?.taskTitle).toBe("do the thing later");
+
+    // Same protection for cron_job.
+    const cronThreadKey = buildThreadKey("C-preserve", "cron-job:job-99");
+    ensureMessageThread({
+      platform: "slack",
+      channelId: "C-preserve",
+      threadId: "cron-job:job-99",
+      replyThreadId: "cron-job:job-99",
+      sourceKind: "cron_job",
+      cronJobId: "job-99",
+      cronJobTitle: "nightly cron",
+    });
+    ensureMessageThread({
+      platform: "slack",
+      channelId: "C-preserve",
+      threadId: "cron-job:job-99",
+      replyThreadId: "cron-job:job-99",
+      sourceKind: "user",
+    });
+    const cronDetail = getMessageThreadById(cronThreadKey);
+    expect(cronDetail?.sourceKind).toBe("cron_job");
+    expect(cronDetail?.cronJobId).toBe("job-99");
+
+    // Sanity check: a plain user thread upgraded to task still reflects the
+    // more specific value (upgrades user -> task are allowed).
+    const upgradeKey = buildThreadKey("C-preserve", "T-upgrade");
+    ensureMessageThread({
+      platform: "slack",
+      channelId: "C-preserve",
+      threadId: "T-upgrade",
+      replyThreadId: "T-upgrade",
+    });
+    ensureMessageThread({
+      platform: "slack",
+      channelId: "C-preserve",
+      threadId: "T-upgrade",
+      replyThreadId: "T-upgrade",
+      sourceKind: "task",
+      taskId: "task-upgrade",
+    });
+    const upgraded = getMessageThreadById(upgradeKey);
+    expect(upgraded?.sourceKind).toBe("task");
+    expect(upgraded?.taskId).toBe("task-upgrade");
+  });
+
   it("captures a full question → reply → answer batch timeline", () => {
     const threadKey = buildThreadKey("C-q", "T-q");
     ensureMessageThread({

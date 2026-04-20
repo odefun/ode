@@ -632,7 +632,10 @@ export function ensureMessageThread(params: EnsureMessageThreadParams): string {
        working_directory    = COALESCE(excluded.working_directory, message_thread.working_directory),
        thread_owner_user_id = COALESCE(excluded.thread_owner_user_id, message_thread.thread_owner_user_id),
        branch_name          = COALESCE(excluded.branch_name, message_thread.branch_name),
-       source_kind          = excluded.source_kind,
+       source_kind          = CASE
+                                WHEN message_thread.source_kind IN ('task','cron_job') THEN message_thread.source_kind
+                                ELSE excluded.source_kind
+                              END,
        cron_job_id          = COALESCE(excluded.cron_job_id, message_thread.cron_job_id),
        cron_job_title       = COALESCE(excluded.cron_job_title, message_thread.cron_job_title),
        task_id              = COALESCE(excluded.task_id, message_thread.task_id),
