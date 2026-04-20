@@ -19,7 +19,14 @@ export function defaultInboundPolicy(params: {
   }
 
   if (!params.isTopLevel && !params.mentionedBot) {
-    if (!params.activeThread) {
+    // `threadOwnerMessage` is true either when the sender is the claimed
+    // owner of the thread, or when the thread is still owned by a synthetic
+    // placeholder (task:/cron:/cron-job:) waiting for the first human
+    // replier to adopt it. In both cases the bot should engage without
+    // requiring an @-mention, even if the activity window has lapsed or
+    // the last-activity bot id doesn't match (e.g. cron seeds the session
+    // with a synthetic `lastActivityBotId`).
+    if (!params.threadOwnerMessage && !params.activeThread) {
       return { kind: "ignore", reason: "not_mentioned_and_inactive" };
     }
     if (!params.threadOwnerMessage) {
@@ -29,7 +36,7 @@ export function defaultInboundPolicy(params: {
 
   const shouldProcess = params.isTopLevel
     ? params.mentionedBot
-    : (params.mentionedBot || params.activeThread);
+    : (params.mentionedBot || params.activeThread || params.threadOwnerMessage);
 
   if (!shouldProcess) {
     return { kind: "ignore", reason: "not_mentioned_and_inactive" };
