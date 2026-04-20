@@ -60,7 +60,7 @@ const CRON_PREPARE_TIMEOUT_MS = parsePositiveIntEnv(
  */
 const CRON_AGENT_TIMEOUT_MS = parsePositiveIntEnv(
   process.env.ODE_CRON_AGENT_TIMEOUT_MS,
-  30 * 60_000
+  2 * 60 * 60_000
 );
 
 function parsePositiveIntEnv(raw: string | undefined, fallback: number): number {
