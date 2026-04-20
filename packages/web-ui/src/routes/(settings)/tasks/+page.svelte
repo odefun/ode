@@ -68,6 +68,23 @@
   // Create/edit form is collapsible, collapsed by default. Auto-expands when editing.
   let isCreateFormOpen = $state(false);
 
+  // Pagination: show 10 tasks at a time, "Load more" appends another 10.
+  const TASKS_PAGE_SIZE = 10;
+  let visibleCount = $state(TASKS_PAGE_SIZE);
+  const visibleTasks = $derived(tasks.slice(0, visibleCount));
+  // Per-task collapse state. Collapsed by default; click to expand message/details.
+  let expandedTaskIds = $state<Set<string>>(new Set());
+
+  function toggleTaskExpanded(taskId: string): void {
+    const next = new Set(expandedTaskIds);
+    if (next.has(taskId)) {
+      next.delete(taskId);
+    } else {
+      next.add(taskId);
+    }
+    expandedTaskIds = next;
+  }
+
   function isProviderEnabled(provider: AgentProviderId): boolean {
     const agents = $localSettingStore.config.agents as Record<string, { enabled?: boolean }>;
     return agents[provider]?.enabled === true;
@@ -164,6 +181,17 @@
     formRunImmediately = false;
     message = "";
     isCreateFormOpen = true;
+    // Make sure the edited task is visible and expanded, even if it's beyond
+    // the current page window.
+    const index = tasks.findIndex((item) => item.id === task.id);
+    if (index >= 0 && index + 1 > visibleCount) {
+      visibleCount = index + 1;
+    }
+    if (!expandedTaskIds.has(task.id)) {
+      const next = new Set(expandedTaskIds);
+      next.add(task.id);
+      expandedTaskIds = next;
+    }
     if (typeof window !== "undefined") {
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
@@ -558,7 +586,13 @@
     <div class="rounded-lg border p-4">
       <div class="mb-3 flex items-center justify-between gap-2">
         <p class="text-sm font-medium">{t("Scheduled Tasks", "任务列表")}</p>
-        <Badge variant="outline">{tasks.length} {t("tasks", "个任务")}</Badge>
+        <Badge variant="outline">
+          {#if tasks.length > visibleTasks.length}
+            {visibleTasks.length} / {tasks.length} {t("tasks", "个任务")}
+          {:else}
+            {tasks.length} {t("tasks", "个任务")}
+          {/if}
+        </Badge>
       </div>
 
       {#if isLoading && tasks.length === 0}
@@ -567,32 +601,45 @@
         <p class="text-sm text-[hsl(var(--muted-foreground))]">{t("No tasks yet.", "还没有任务。")}</p>
       {:else}
         <div class="space-y-3">
-          {#each tasks as task}
+          {#each visibleTasks as task}
+            {@const isExpanded = expandedTaskIds.has(task.id)}
             <div class="rounded-lg border p-4">
               <div class="mb-3 flex flex-wrap items-start justify-between gap-3">
-                <div class="space-y-2">
-                  <div class="flex flex-wrap items-center gap-2">
-                    <Badge variant={getStatusVariant(task.status)}>{getStatusLabel(task.status)}</Badge>
-                    <Badge variant="outline">{task.platform}</Badge>
-                    {#if task.agent}
-                      <Badge variant="outline">
-                        {isAgentProviderId(task.agent)
-                          ? AGENT_PROVIDER_LABELS[task.agent as AgentProviderId]
-                          : task.agent}
-                      </Badge>
+                <button
+                  type="button"
+                  class="flex flex-1 min-w-0 items-start gap-2 text-left"
+                  onclick={() => toggleTaskExpanded(task.id)}
+                  aria-expanded={isExpanded}
+                >
+                  {#if isExpanded}
+                    <ChevronDown class="mt-1 h-4 w-4 shrink-0 text-[hsl(var(--muted-foreground))]" />
+                  {:else}
+                    <ChevronRight class="mt-1 h-4 w-4 shrink-0 text-[hsl(var(--muted-foreground))]" />
+                  {/if}
+                  <div class="min-w-0 space-y-2">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <Badge variant={getStatusVariant(task.status)}>{getStatusLabel(task.status)}</Badge>
+                      <Badge variant="outline">{task.platform}</Badge>
+                      {#if task.agent}
+                        <Badge variant="outline">
+                          {isAgentProviderId(task.agent)
+                            ? AGENT_PROVIDER_LABELS[task.agent as AgentProviderId]
+                            : task.agent}
+                        </Badge>
+                      {/if}
+                    </div>
+                    <p class="text-sm font-medium truncate">{task.title}</p>
+                    <p class="text-xs text-[hsl(var(--muted-foreground))]">
+                      {t("Scheduled", "计划时间")}: {formatTimestamp(task.scheduledAt)}
+                    </p>
+                    <p class="text-xs text-[hsl(var(--muted-foreground))]">{getChannelLabel(task)}</p>
+                    {#if task.threadId}
+                      <p class="text-xs text-[hsl(var(--muted-foreground))]">
+                        {t("Thread", "Thread")}: <code>{task.threadId}</code>
+                      </p>
                     {/if}
                   </div>
-                  <p class="text-sm font-medium">{task.title}</p>
-                  <p class="text-xs text-[hsl(var(--muted-foreground))]">
-                    {t("Scheduled", "计划时间")}: {formatTimestamp(task.scheduledAt)}
-                  </p>
-                  <p class="text-xs text-[hsl(var(--muted-foreground))]">{getChannelLabel(task)}</p>
-                  {#if task.threadId}
-                    <p class="text-xs text-[hsl(var(--muted-foreground))]">
-                      {t("Thread", "Thread")}: <code>{task.threadId}</code>
-                    </p>
-                  {/if}
-                </div>
+                </button>
 
                 <div class="flex flex-wrap items-center gap-2">
                   {#if task.status === "pending"}
@@ -637,26 +684,45 @@
                 </div>
               </div>
 
-              <div class="rounded-md bg-[hsl(var(--muted)/0.4)] p-3">
-                <p class="mb-1 text-xs font-medium uppercase tracking-wide text-[hsl(var(--muted-foreground))]">{t("Message", "消息内容")}</p>
-                <p class="text-sm leading-6 whitespace-pre-wrap">{task.messageText}</p>
-              </div>
-
-              <div class="mt-3 grid gap-2 text-xs text-[hsl(var(--muted-foreground))] md:grid-cols-2">
-                <p>{t("Triggered", "触发时间")}: {formatTimestamp(task.triggeredAt)}</p>
-                <p>{t("Completed", "完成时间")}: {formatTimestamp(task.completedAt)}</p>
-                <p>{t("Created", "创建于")}: {formatTimestamp(task.createdAt)}</p>
-                <p>{t("Updated", "更新于")}: {formatTimestamp(task.updatedAt)}</p>
-              </div>
-
-              {#if task.lastError}
-                <div class="mt-3 rounded-md border border-[hsl(var(--destructive)/0.35)] bg-[hsl(var(--destructive)/0.08)] p-3 text-sm text-[hsl(var(--destructive))]">
-                  {task.lastError}
+              {#if isExpanded}
+                <div class="rounded-md bg-[hsl(var(--muted)/0.4)] p-3">
+                  <p class="mb-1 text-xs font-medium uppercase tracking-wide text-[hsl(var(--muted-foreground))]">{t("Message", "消息内容")}</p>
+                  <p class="text-sm leading-6 whitespace-pre-wrap">{task.messageText}</p>
                 </div>
+
+                <div class="mt-3 grid gap-2 text-xs text-[hsl(var(--muted-foreground))] md:grid-cols-2">
+                  <p>{t("Triggered", "触发时间")}: {formatTimestamp(task.triggeredAt)}</p>
+                  <p>{t("Completed", "完成时间")}: {formatTimestamp(task.completedAt)}</p>
+                  <p>{t("Created", "创建于")}: {formatTimestamp(task.createdAt)}</p>
+                  <p>{t("Updated", "更新于")}: {formatTimestamp(task.updatedAt)}</p>
+                </div>
+
+                {#if task.lastError}
+                  <div class="mt-3 rounded-md border border-[hsl(var(--destructive)/0.35)] bg-[hsl(var(--destructive)/0.08)] p-3 text-sm text-[hsl(var(--destructive))]">
+                    {task.lastError}
+                  </div>
+                {/if}
               {/if}
             </div>
           {/each}
         </div>
+
+        {#if tasks.length > visibleTasks.length}
+          <div class="mt-4 flex justify-center">
+            <Button
+              variant="outline"
+              size="sm"
+              on:click={() => {
+                visibleCount = Math.min(tasks.length, visibleCount + TASKS_PAGE_SIZE);
+              }}
+            >
+              {t(
+                `Load more (${tasks.length - visibleTasks.length} remaining)`,
+                `加载更多（还剩 ${tasks.length - visibleTasks.length} 个）`,
+              )}
+            </Button>
+          </div>
+        {/if}
       {/if}
     </div>
   </div>
