@@ -13,7 +13,7 @@
 
   const pathname = $derived($page.url.pathname);
   const normalizedPathname = $derived(pathname.endsWith("/") && pathname.length > 1 ? pathname.slice(0, -1) : pathname);
-  const activeSection = $derived.by<"general" | "agents" | "inbox" | "cronJobs" | "tasks" | "workspace">(() =>
+  const activeSection = $derived.by<"general" | "agents" | "inbox" | "cronJobs" | "tasks" | "prTracker" | "workspace">(() =>
     normalizedPathname === "/agents"
       ? "agents"
       : normalizedPathname === "/inbox"
@@ -22,6 +22,8 @@
         ? "cronJobs"
       : normalizedPathname === "/tasks"
         ? "tasks"
+      : normalizedPathname === "/pr-tracker"
+        ? "prTracker"
         : normalizedPathname.startsWith("/workspace")
           ? "workspace"
           : "general"
@@ -223,6 +225,13 @@
           on:click={() => goto("/tasks")}
         >
           {t("Tasks", "一次性任务")}
+        </Button>
+        <Button
+          variant={activeSection === "prTracker" ? "default" : "secondary"}
+          className="w-full justify-start"
+          on:click={() => goto("/pr-tracker")}
+        >
+          {t("PR Tracker", "PR 追踪")}
         </Button>
       </div>
     </Card>

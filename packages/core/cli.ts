@@ -10,6 +10,7 @@ import { isProcessAlive, readDaemonState, type DaemonState } from "@/core/daemon
 import { runOnboarding } from "@/core/onboarding";
 import { handleTaskCommand } from "@/core/cli-handlers/task";
 import { handleCronCommand } from "@/core/cli-handlers/cron";
+import { handlePrTrackerCommand } from "@/core/cli-handlers/pr-tracker";
 import { handleSendCommand } from "@/core/cli-handlers/send";
 import { handleMessagesCommand } from "@/core/cli-handlers/messages";
 import { handleReactionCommand } from "@/core/cli-handlers/reaction";
@@ -512,6 +513,11 @@ if (command === "task") {
 
 if (command === "cron") {
   const code = await handleCronCommand(args.slice(1));
+  process.exit(code);
+}
+
+if (command === "pr-tracker" || command === "pr_tracker") {
+  const code = await handlePrTrackerCommand(args.slice(1));
   process.exit(code);
 }
 

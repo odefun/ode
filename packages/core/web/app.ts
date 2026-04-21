@@ -8,6 +8,7 @@ import { registerSessionRoutes } from "./routes/sessions";
 import { registerInboxRoutes } from "./routes/inbox";
 import { registerCronJobRoutes } from "./routes/cron-jobs";
 import { registerTaskRoutes } from "./routes/tasks";
+import { registerPrTrackerRoutes } from "./routes/pr-trackers";
 import { registerSendRoutes } from "./routes/send";
 import { registerMessagesRoutes } from "./routes/messages";
 import { registerReactionsRoutes } from "./routes/reactions";
@@ -37,6 +38,7 @@ export function createWebApp(): Elysia {
   registerInboxRoutes(app);
   registerCronJobRoutes(app);
   registerTaskRoutes(app);
+  registerPrTrackerRoutes(app);
   registerSendRoutes(app);
   registerMessagesRoutes(app);
   registerReactionsRoutes(app);
