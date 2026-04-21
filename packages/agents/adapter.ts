@@ -8,6 +8,19 @@ import {
   buildStatusMessageByProvider,
 } from "@/utils/status";
 
+/**
+ * Session → provider index. Intentionally unbounded: this map is used by
+ * `abortSession`, `subscribeToSession`, `ensureSession`, and the task / cron
+ * schedulers to dispatch to the correct agent client for a given session id.
+ * Evicting an entry and falling back to a default provider would misroute
+ * those calls, so this has to stay a correctness index, not a size-capped
+ * cache.
+ *
+ * Practical growth is bounded by the number of unique session ids the daemon
+ * has observed during its lifetime (~60 bytes/entry). A typical daemon sees
+ * far fewer sessions than the per-turn event buffers we optimised elsewhere,
+ * so the unbounded footprint here is acceptable.
+ */
 const sessionProviders = new Map<string, AgentProviderId>();
 
 function getProviderForChannel(channelId: string): AgentProviderId {

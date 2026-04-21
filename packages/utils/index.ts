@@ -18,3 +18,9 @@ export {
 } from "./status";
 export { extractEventSessionId } from "./session-id";
 export { ensureSessionWorktree, resolveRepoRoot } from "./worktree";
+export {
+  truncateEventPayload,
+  truncateString,
+  type TruncateEventOptions,
+} from "./event-truncation";
+export { BoundedSet, BoundedMap } from "./bounded-collections";

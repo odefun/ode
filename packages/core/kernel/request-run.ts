@@ -31,6 +31,7 @@ import {
   buildSessionMessageState,
   extractEventSessionId,
   getStatusMessageKey,
+  truncateEventPayload,
   type SessionEvent,
   type SessionMessageState,
   log,
@@ -290,10 +291,33 @@ async function startKernelEventStreamWatcher(params: {
       }
     }
 
+    // Decide up-front which string fields inside this event must be kept
+    // verbatim (i.e. never replaced by a truncation marker). Assistant text /
+    // reasoning / thinking parts inside `message.part.updated` feed
+    // `state.currentText` in session-inspector.ts, which request-run.ts later
+    // publishes to Slack as the final reply on `stop` and tool-only turns —
+    // truncating them here would post `...[truncated N bytes]` to the user.
+    const preserveAssistantText =
+      event?.type === "message.part.updated" &&
+      ((): boolean => {
+        const partType = (event as any)?.properties?.part?.type;
+        return partType === "text" || partType === "reasoning" || partType === "thinking";
+      })();
+    const preserveStringAtPath = preserveAssistantText
+      ? (path: string): boolean => path === "properties.part.text"
+      : undefined;
+
     const sessionEvent: SessionEvent = {
       timestamp: Date.now(),
       type: event.type || "unknown",
-      data: event as Record<string, unknown>,
+      // Truncate any multi-KB strings inside the raw payload before we buffer
+      // it for the turn. The live-status renderer never shows full tool output
+      // — it only reads a short preview of tool input and a 90-char slice of
+      // thinking text — so capping most strings at ~4 KB is lossless for the
+      // UI. See packages/utils/event-truncation.ts.
+      data: truncateEventPayload(event as Record<string, unknown>, {
+        preserveStringAtPath,
+      }),
     };
     eventHistory.push(sessionEvent);
 

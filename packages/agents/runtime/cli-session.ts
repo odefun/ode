@@ -9,11 +9,21 @@ type CliSessionRuntime = {
   setSessionEnvironment: (sessionId: string, env: SessionEnvironment) => void;
 };
 
+/**
+ * Minimal surface a "new session" tracker needs to expose. We accept either a
+ * raw `Set<string>` or the bounded variant from `@/utils` — both satisfy this
+ * contract — so agent clients can pick whichever they want without forcing a
+ * circular dependency here.
+ */
+type NewSessionTracker = {
+  add: (value: string) => unknown;
+};
+
 type CliThreadSessionManagerOptions = {
   providerId: AgentProviderId;
   providerName: string;
   runtime: CliSessionRuntime;
-  newSessions?: Set<string>;
+  newSessions?: NewSessionTracker;
   sessionIdFactory?: () => string;
   validateSessionId?: (sessionId: string) => boolean;
 };

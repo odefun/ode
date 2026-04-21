@@ -1,5 +1,5 @@
 import { setThreadSessionId } from "@/config/local/sessions";
-import { log } from "@/utils";
+import { BoundedSet, log } from "@/utils";
 import { buildPromptParts, buildPromptText, buildSystemPrompt } from "../shared";
 import {
   CliAgentRuntime,
@@ -18,7 +18,14 @@ export type SessionEnvironment = RuntimeSessionEnvironment;
 
 const runtime = new CliAgentRuntime("Claude");
 type RuntimeRequestEntry = ReturnType<CliAgentRuntime["beginRequest"]>;
-const newSessions = new Set<string>();
+/**
+ * FIFO-bounded cache of session ids that have not yet completed their first
+ * turn. Evicting the oldest entry on overflow is safe: the flag only gates
+ * one-time startup behaviour for that session, and any session that has been
+ * queued for this long without being consumed is effectively abandoned.
+ */
+const NEW_SESSIONS_MAX_ENTRIES = 1000;
+const newSessions = new BoundedSet<string>(NEW_SESSIONS_MAX_ENTRIES);
 const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type ClaudeJsonRecord = {

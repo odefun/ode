@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "child_process";
-import { log } from "@/utils";
+import { BoundedSet, log } from "@/utils";
 import { buildPromptParts, buildPromptText, buildSystemPrompt, buildSystemWrappedPrompt } from "../shared";
 import {
   CliAgentRuntime,
@@ -17,7 +17,9 @@ import type {
 export type SessionEnvironment = RuntimeSessionEnvironment;
 
 const runtime = new CliAgentRuntime("Kiro");
-const newSessions = new Set<string>();
+/** See note in claude/client.ts — FIFO-bounded so abandoned sessions don't leak. */
+const NEW_SESSIONS_MAX_ENTRIES = 1000;
+const newSessions = new BoundedSet<string>(NEW_SESSIONS_MAX_ENTRIES);
 export const { createSession, getOrCreateSession } = createCliThreadSessionManager({
   providerId: "kiro",
   providerName: "Kiro",
