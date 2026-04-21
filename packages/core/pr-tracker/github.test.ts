@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
   fetchPrActivity,
+  GitHubActivityFetchError,
   renderEventsSummary,
   renderPrompt,
+  resolveApiBaseUrl,
   resolveGitHubToken,
   type PrEvent,
 } from "./github";
@@ -178,9 +180,10 @@ describe("fetchPrActivity", () => {
           created_at: newer,
           updated_at: newer,
           issue_url: "https://api.github.com/repos/acme/thing/issues/42",
+          pull_request_url: "https://api.github.com/repos/acme/thing/pulls/42",
         },
-        // A comment on an issue, not a PR (has /issues/ path but URL would also
-        // parse to a number; in our data we set issue_url to a real issue #99).
+        // An issue-only comment (no pull_request_url field). Should be dropped
+        // so we don't fabricate a PR bucket for a regular issue.
         {
           id: 112,
           html_url: "https://github.com/acme/thing/issues/99#issuecomment-112",
@@ -230,10 +233,10 @@ describe("fetchPrActivity", () => {
     );
 
     // PR 42 should contain the pr_updated event, the issue comment, the review
-    // comment, and the fresh review. Issue #99 shows up because of the 112
-    // comment (parsed to pr_number=99), but should have no pr_updated/reviews.
+    // comment, and the fresh review. The issue-99 comment has no
+    // pull_request_url so it's correctly dropped (not a PR thread).
     const byNumber = new Map(summaries.map((s) => [s.prNumber, s] as const));
-    expect(Array.from(byNumber.keys()).sort()).toEqual([42, 99]);
+    expect(Array.from(byNumber.keys()).sort()).toEqual([42]);
 
     const pr42 = byNumber.get(42)!;
     expect(pr42.title).toBe("Feature A");
@@ -243,10 +246,6 @@ describe("fetchPrActivity", () => {
     // Events are sorted by timestamp ascending.
     const times = pr42.events.map((e) => e.timestamp);
     expect([...times].sort((a, b) => a - b)).toEqual(times);
-
-    const pr99 = byNumber.get(99)!;
-    expect(pr99.events).toHaveLength(1);
-    expect(pr99.events[0]!.kind).toBe("comment");
   });
 
   test("returns empty when no activity", async () => {
@@ -263,8 +262,7 @@ describe("fetchPrActivity", () => {
     expect(summaries).toEqual([]);
   });
 
-  test("swallows individual endpoint failures (degraded mode)", async () => {
-    const since = Date.parse("2026-04-20T00:00:00Z");
+  test("swallows individual endpoint failures (degraded mode)", async () => {    const since = Date.parse("2026-04-20T00:00:00Z");
     const newer = new Date(since + 60_000).toISOString();
 
     const fetchImpl: (url: string) => Promise<Response> = async (url: string) => {
@@ -283,6 +281,7 @@ describe("fetchPrActivity", () => {
               created_at: newer,
               updated_at: newer,
               issue_url: "https://api.github.com/repos/acme/thing/issues/1",
+              pull_request_url: "https://api.github.com/repos/acme/thing/pulls/1",
             },
           ]),
           { status: 200 },
@@ -304,5 +303,107 @@ describe("fetchPrActivity", () => {
     expect(summaries).toHaveLength(1);
     expect(summaries[0]!.prNumber).toBe(1);
     expect(summaries[0]!.events.map((e) => e.kind)).toEqual(["comment"]);
+  });
+
+  test("throws GitHubActivityFetchError when all three endpoints fail", async () => {
+    const since = Date.parse("2026-04-20T00:00:00Z");
+    const fetchImpl: (url: string) => Promise<Response> = async () =>
+      new Response(JSON.stringify({ message: "rate limited" }), { status: 403 });
+
+    await expect(
+      fetchPrActivity(
+        { owner: "acme", repo: "thing", sinceMs: since, token: "fake" },
+        fetchImpl,
+      ),
+    ).rejects.toThrow(GitHubActivityFetchError);
+  });
+
+  test("routes enterprise host into GHES base URL", async () => {
+    const since = Date.parse("2026-04-20T00:00:00Z");
+    const newer = new Date(since + 60_000).toISOString();
+    const calls: string[] = [];
+    const fetchImpl: (url: string) => Promise<Response> = async (url: string) => {
+      calls.push(url);
+      // Return a valid (empty-ish) response for the enterprise base URL.
+      if (url.startsWith("https://github.corp.example.com/api/v3")) {
+        if (url.includes("/pulls?")) {
+          return new Response(
+            JSON.stringify([
+              {
+                number: 7,
+                title: "T",
+                html_url: "https://github.corp.example.com/acme/thing/pull/7",
+                state: "open",
+                updated_at: newer,
+                user: { login: "alice" },
+                head: { ref: "feat" },
+                base: { ref: "main" },
+              },
+            ]),
+            { status: 200 },
+          );
+        }
+        return new Response(JSON.stringify([]), { status: 200 });
+      }
+      return new Response(JSON.stringify({ message: "wrong host" }), { status: 404 });
+    };
+
+    const summaries = await fetchPrActivity(
+      {
+        owner: "acme",
+        repo: "thing",
+        sinceMs: since,
+        token: "fake",
+        host: "github.corp.example.com",
+      },
+      fetchImpl,
+    );
+    expect(summaries.map((s) => s.prNumber)).toEqual([7]);
+    // Every call should hit the enterprise base URL.
+    expect(calls.every((u) => u.startsWith("https://github.corp.example.com/api/v3"))).toBe(true);
+  });
+
+  test("drops issue comments without pull_request_url", async () => {
+    const since = Date.parse("2026-04-20T00:00:00Z");
+    const newer = new Date(since + 60_000).toISOString();
+    const fetchImpl = buildMockFetch({
+      "/repos/acme/thing/pulls?state=all&sort=updated&direction=desc&per_page=50&page=1": [],
+      [`/repos/acme/thing/issues/comments?since=${encodeURIComponent(new Date(since).toISOString())}&per_page=100&sort=updated&direction=asc`]: [
+        {
+          id: 1,
+          html_url: "https://github.com/acme/thing/issues/100#issuecomment-1",
+          body: "plain issue comment",
+          user: { login: "x" },
+          created_at: newer,
+          updated_at: newer,
+          issue_url: "https://api.github.com/repos/acme/thing/issues/100",
+          // no pull_request_url → plain issue → must be ignored
+        },
+      ],
+      [`/repos/acme/thing/pulls/comments?since=${encodeURIComponent(new Date(since).toISOString())}&per_page=100&sort=updated&direction=asc`]: [],
+    });
+    const summaries = await fetchPrActivity(
+      { owner: "acme", repo: "thing", sinceMs: since, token: "fake" },
+      fetchImpl,
+    );
+    expect(summaries).toEqual([]);
+  });
+});
+
+describe("resolveApiBaseUrl", () => {
+  test("github.com → api.github.com", () => {
+    expect(resolveApiBaseUrl("github.com")).toBe("https://api.github.com");
+    expect(resolveApiBaseUrl("GITHUB.COM")).toBe("https://api.github.com");
+    expect(resolveApiBaseUrl(null)).toBe("https://api.github.com");
+    expect(resolveApiBaseUrl("")).toBe("https://api.github.com");
+  });
+
+  test("GHES hostname → /api/v3", () => {
+    expect(resolveApiBaseUrl("github.corp.example.com")).toBe(
+      "https://github.corp.example.com/api/v3",
+    );
+    expect(resolveApiBaseUrl("github.enterprise.io")).toBe(
+      "https://github.enterprise.io/api/v3",
+    );
   });
 });

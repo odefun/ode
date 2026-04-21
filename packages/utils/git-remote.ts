@@ -7,6 +7,23 @@ export type GitHubRepo = {
 };
 
 /**
+ * Return true iff `host` is a legitimate GitHub hostname. We accept the
+ * canonical public host, explicit subdomains of `github.com`, and anything
+ * whose hostname literally starts with `github.` (typical GHES convention
+ * for per-tenant subdomains like `github.corp.example.com`). We reject
+ * look-alike domains such as `notgithub.com` that contain the substring
+ * "github" but are not actually run by GitHub.
+ */
+function isGitHubHost(host: string): boolean {
+  const lowered = host.trim().toLowerCase();
+  if (!lowered) return false;
+  if (lowered === "github.com" || lowered === "www.github.com") return true;
+  if (lowered.endsWith(".github.com")) return true; // ssh.github.com, gist.github.com, ...
+  if (lowered.startsWith("github.")) return true; // github.corp.example.com (GHES)
+  return false;
+}
+
+/**
  * Parse a git remote URL and return the GitHub owner / repo.
  * Supports the common GitHub URL shapes:
  *   - https://github.com/owner/repo.git
@@ -29,7 +46,7 @@ export function parseGitHubRemote(url: string | null | undefined): GitHubRepo | 
     const host = scpMatch[1]!;
     const owner = scpMatch[2]!;
     const repo = scpMatch[3]!;
-    if (!host.includes("github")) return null;
+    if (!isGitHubHost(host)) return null;
     return { host, owner, repo };
   }
 
@@ -41,7 +58,7 @@ export function parseGitHubRemote(url: string | null | undefined): GitHubRepo | 
     const host = urlMatch[1]!;
     const owner = urlMatch[2]!;
     const repo = urlMatch[3]!;
-    if (!host.includes("github")) return null;
+    if (!isGitHubHost(host)) return null;
     return { host, owner, repo };
   }
 

@@ -54,9 +54,35 @@ export type FetchActivityOptions = {
   sinceMs: number;
   /** Optional explicit token. If omitted, resolved via {@link resolveGitHubToken}. */
   token?: string | null;
-  /** Override the REST base URL (useful for tests / GHES). */
+  /**
+   * Override the REST base URL (useful for tests / GHES). Takes precedence
+   * over `host` when both are set.
+   */
   baseUrl?: string;
+  /**
+   * GitHub hostname (e.g. "github.com" or "github.corp.example.com"). When
+   * provided and `baseUrl` is not, we resolve the REST endpoint per host:
+   *   - github.com          → https://api.github.com
+   *   - anything else       → https://<host>/api/v3 (GHES convention)
+   */
+  host?: string | null;
 };
+
+/**
+ * Map a GitHub hostname to its REST API base URL.
+ *
+ * github.com uses the public `api.github.com` subdomain; GitHub Enterprise
+ * Server (GHES) instances expose the REST API under `/api/v3` on the same
+ * hostname. This helper encapsulates that convention so callers don't have
+ * to care.
+ */
+export function resolveApiBaseUrl(host: string | null | undefined): string {
+  const trimmed = (host ?? "").trim().toLowerCase();
+  if (!trimmed || trimmed === "github.com" || trimmed === "api.github.com") {
+    return DEFAULT_BASE;
+  }
+  return `https://${trimmed}/api/v3`;
+}
 
 // ---------------------------------------------------------------------------
 // Token resolution.
@@ -144,6 +170,13 @@ type GhIssueComment = {
   created_at: string;
   updated_at: string;
   issue_url: string;
+  /**
+   * Set by GitHub when the comment is on a pull request (REST returns
+   * `issues/{n}` for both PRs and plain issues; `pull_request_url` is the
+   * disambiguator). Absent on plain issue comments. We rely on this to
+   * filter `/issues/comments` results down to PR-only.
+   */
+  pull_request_url?: string | null;
 };
 
 type GhReviewComment = {
@@ -202,6 +235,23 @@ function prNumberFromPullUrl(pullUrl: string): number | null {
 
 function loginOf(user: GhUser): string {
   return user?.login?.trim() || "unknown";
+}
+
+/**
+ * Unwrap a `Promise.allSettled` result: return the fulfilled array, or log +
+ * record the failure and fall back to an empty list. Lets callers collect
+ * partial results with a single trip through the list of settled results.
+ */
+function extractSettled<T>(
+  settled: PromiseSettledResult<T[]>,
+  label: string,
+  failures: Error[],
+): T[] {
+  if (settled.status === "fulfilled") return settled.value;
+  const err = settled.reason instanceof Error ? settled.reason : new Error(String(settled.reason));
+  failures.push(new Error(`${label}: ${err.message}`));
+  log.warn(`pr-tracker: ${label} failed`, { err: String(err) });
+  return [];
 }
 
 // ---------------------------------------------------------------------------
@@ -286,7 +336,14 @@ async function fetchReviewsForPr(
 // ---------------------------------------------------------------------------
 
 function toPrEventFromIssueComment(c: GhIssueComment): PrEvent | null {
-  const prNumber = prNumberFromIssueUrl(c.issue_url);
+  // `/issues/comments` mixes PR-thread comments with comments on plain
+  // issues. GitHub populates `pull_request_url` only on PR-thread comments,
+  // so we use its presence as the disambiguator. If it's absent we drop
+  // the event entirely — otherwise the tracker would fabricate a PR bucket
+  // for a regular issue number and dispatch a bogus "PR update" agent run.
+  const prUrl = c.pull_request_url?.trim();
+  if (!prUrl) return null;
+  const prNumber = prNumberFromPullUrl(prUrl) ?? prNumberFromIssueUrl(c.issue_url);
   if (!prNumber) return null;
   return {
     kind: "comment",
@@ -294,7 +351,7 @@ function toPrEventFromIssueComment(c: GhIssueComment): PrEvent | null {
     timestamp: toMs(c.updated_at || c.created_at),
     author: loginOf(c.user),
     body: (c.body ?? "").trim(),
-    meta: { url: c.html_url },
+    meta: { url: c.html_url, prNumber: String(prNumber) },
   };
 }
 
@@ -352,6 +409,21 @@ function toPrEventFromPr(pr: GhPullRequest): PrEvent {
  * are "updated_at >= since", but we additionally filter `timestamp > sinceMs`
  * on our side so a stale cursor doesn't double-fire an event).
  */
+/**
+ * Thrown by {@link fetchPrActivity} when none of the core GitHub queries
+ * succeed. Lets the scheduler distinguish "repo is quiet" (empty result)
+ * from "we have no idea what's going on" (broken auth, 5xx, rate limit),
+ * so the caller can choose not to advance the poll cursor.
+ */
+export class GitHubActivityFetchError extends Error {
+  readonly causes: Error[];
+  constructor(message: string, causes: Error[]) {
+    super(message);
+    this.name = "GitHubActivityFetchError";
+    this.causes = causes;
+  }
+}
+
 export async function fetchPrActivity(
   options: FetchActivityOptions,
   fetchImpl: FetchFn = fetch,
@@ -359,8 +431,11 @@ export async function fetchPrActivity(
   const token = options.token !== undefined
     ? options.token
     : resolveGitHubToken({});
+  const resolvedBase = options.baseUrl?.trim()
+    ? options.baseUrl.replace(/\/$/, "")
+    : resolveApiBaseUrl(options.host);
   const ctx: RequestContext = {
-    baseUrl: options.baseUrl?.replace(/\/$/, "") || DEFAULT_BASE,
+    baseUrl: resolvedBase,
     token,
     fetchImpl,
   };
@@ -369,21 +444,28 @@ export async function fetchPrActivity(
   const sinceIso = new Date(sinceMs || 0).toISOString();
 
   // Run the three high-level queries in parallel — they hit different
-  // endpoints and don't share pagination state.
-  const [pulls, issueComments, reviewComments] = await Promise.all([
-    fetchRecentlyUpdatedPulls(ctx, options.owner, options.repo, sinceMs).catch((err) => {
-      log.warn("pr-tracker: pulls list failed", { err: String(err) });
-      return [] as GhPullRequest[];
-    }),
-    fetchIssueComments(ctx, options.owner, options.repo, sinceIso).catch((err) => {
-      log.warn("pr-tracker: issue comments failed", { err: String(err) });
-      return [] as GhIssueComment[];
-    }),
-    fetchReviewComments(ctx, options.owner, options.repo, sinceIso).catch((err) => {
-      log.warn("pr-tracker: review comments failed", { err: String(err) });
-      return [] as GhReviewComment[];
-    }),
+  // endpoints and don't share pagination state. We use `allSettled` so that
+  // a single endpoint failure degrades to partial results, while a total
+  // failure (every endpoint rejected) is surfaced to the scheduler — in
+  // that case we MUST NOT let the caller treat the empty list as "no
+  // activity" and advance the poll cursor.
+  const [pullsResult, issueCommentsResult, reviewCommentsResult] = await Promise.allSettled([
+    fetchRecentlyUpdatedPulls(ctx, options.owner, options.repo, sinceMs),
+    fetchIssueComments(ctx, options.owner, options.repo, sinceIso),
+    fetchReviewComments(ctx, options.owner, options.repo, sinceIso),
   ]);
+
+  const failures: Error[] = [];
+  const pulls = extractSettled(pullsResult, "pulls list", failures);
+  const issueComments = extractSettled(issueCommentsResult, "issue comments", failures);
+  const reviewComments = extractSettled(reviewCommentsResult, "review comments", failures);
+
+  if (failures.length >= 3) {
+    throw new GitHubActivityFetchError(
+      `All GitHub endpoints failed while fetching activity for ${options.owner}/${options.repo}: ${failures[0]!.message}`,
+      failures,
+    );
+  }
 
   // Index PRs we've already seen (mix: recent updates + PRs referenced by
   // comments). A single pass keeps bucket construction cheap.
@@ -426,7 +508,9 @@ export async function fetchPrActivity(
     if (toMs(c.updated_at || c.created_at) <= sinceMs) continue;
     const ev = toPrEventFromIssueComment(c);
     if (!ev) continue; // skip non-PR issue comments
-    const bucket = ensureBucket(prNumberFromIssueUrl(c.issue_url)!);
+    const prNumberFromMeta = Number(ev.meta?.prNumber);
+    if (!Number.isFinite(prNumberFromMeta)) continue;
+    const bucket = ensureBucket(prNumberFromMeta);
     bucket.events.push(ev);
   }
 

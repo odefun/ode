@@ -17,6 +17,7 @@ import {
   listProcessedEventIds,
   markPrTrackerPolled,
   recordPrTrackerEvent,
+  setPrTrackerCursor,
   type PrTrackerRecord,
 } from "@/config/local/pr-trackers";
 import { saveSession, type PersistedSession } from "@/config/local/sessions";
@@ -445,6 +446,9 @@ export async function pollTracker(trackerId: string): Promise<PrPollOutcome> {
       fetchPrActivity({
         owner: tracker.repoOwner,
         repo: tracker.repoName,
+        // Route per-tracker host into the REST base URL so Enterprise
+        // trackers stop hitting api.github.com.
+        host: tracker.repoHost,
         sinceMs: since,
         token,
       }),
@@ -459,8 +463,12 @@ export async function pollTracker(trackerId: string): Promise<PrPollOutcome> {
       return { trackerId, prsScanned: summaries.length, prsHandled: 0, prsSkipped: 0 };
     }
 
-    const handled: PrSummary[] = fresh.slice(0, PR_MAX_PRS_PER_POLL);
-    const skipped = fresh.length - handled.length;
+    // Process PRs oldest-updated first so that if we get capped below, the
+    // skipped PRs are the most-recently-updated ones (their cursor-based
+    // rewind is the cleanest: they'll still show up in the next poll).
+    const ordered = [...fresh].sort((a, b) => a.updatedAt - b.updatedAt);
+    const handled: PrSummary[] = ordered.slice(0, PR_MAX_PRS_PER_POLL);
+    const skippedPrs: PrSummary[] = ordered.slice(PR_MAX_PRS_PER_POLL);
 
     let hadFailure = false;
     for (const summary of handled) {
@@ -472,34 +480,53 @@ export async function pollTracker(trackerId: string): Promise<PrPollOutcome> {
       }
     }
 
-    // If we skipped PRs due to the per-poll cap, record dedupe rows for the
-    // first event of each skipped PR so the next poll's cursor-based filter
-    // still sees them as pending. We intentionally do NOT record the full
-    // event set for skipped PRs — the next tick should fan out the agent
-    // runs we couldn't handle this time.
-    if (skipped > 0) {
+    if (skippedPrs.length > 0) {
       log.info("PR tracker capped PRs in a single poll", {
         trackerId: tracker.id,
         totalPrs: fresh.length,
         handled: handled.length,
-        skipped,
+        skipped: skippedPrs.length,
       });
     }
 
-    markPrTrackerPolled(tracker.id, {
-      success: !hadFailure,
-      errorMessage: hadFailure ? "one or more PR dispatches failed" : undefined,
-    });
+    if (hadFailure) {
+      // One or more PR dispatches failed. Treat the whole poll as failed so
+      // the cursor stays pinned; the next tick will retry.
+      markPrTrackerPolled(tracker.id, {
+        success: false,
+        errorMessage: "one or more PR dispatches failed",
+      });
+    } else if (skippedPrs.length > 0) {
+      // Success from the caller's perspective, but we still have work left.
+      // Move the cursor forward only to JUST BEFORE the oldest skipped PR's
+      // earliest new event, so the next `since` window keeps the skipped
+      // PRs discoverable. This is the trick that keeps capped-out polls
+      // lossless across ticks.
+      const earliestSkippedTimestamp = earliestEventTimestamp(skippedPrs);
+      // Subtract 1ms so `updated_at > since` in the GitHub API still matches
+      // the skipped events on the next poll.
+      const nextCursor = Math.max(since, earliestSkippedTimestamp - 1);
+      setPrTrackerCursor(tracker.id, nextCursor);
+      // Also clear any prior `last_error` and refresh last_success_at.
+      markPrTrackerPolled(tracker.id, {
+        success: true,
+        pollCompletedAt: nextCursor,
+      });
+    } else {
+      markPrTrackerPolled(tracker.id, { success: true });
+    }
 
     return {
       trackerId,
       prsScanned: summaries.length,
       prsHandled: handled.length,
-      prsSkipped: skipped,
+      prsSkipped: skippedPrs.length,
       error: hadFailure ? "partial failure" : undefined,
     };
   } catch (error) {
     const { message } = categorizeRuntimeError(error);
+    // Failure branch leaves last_polled_at untouched (see
+    // markPrTrackerPolled) so the next tick retries the same window.
     markPrTrackerPolled(tracker.id, { success: false, errorMessage: message });
     log.warn("PR tracker poll failed", {
       trackerId: tracker.id,
@@ -514,6 +541,19 @@ export async function pollTracker(trackerId: string): Promise<PrPollOutcome> {
       error: message,
     };
   }
+}
+
+function earliestEventTimestamp(summaries: PrSummary[]): number {
+  let earliest = Number.POSITIVE_INFINITY;
+  for (const s of summaries) {
+    for (const ev of s.events) {
+      if (ev.timestamp > 0 && ev.timestamp < earliest) earliest = ev.timestamp;
+    }
+    // Fall back to the PR's updated_at if for some reason no event has a
+    // timestamp (defensive — shouldn't happen with our current event shapes).
+    if (s.updatedAt > 0 && s.updatedAt < earliest) earliest = s.updatedAt;
+  }
+  return Number.isFinite(earliest) ? earliest : Date.now();
 }
 
 async function tick(): Promise<void> {

@@ -852,14 +852,36 @@ export function markPrTrackerPolled(id: string, options: {
       WHERE id = ?
     `).run(ts, ts, ts, id);
   } else {
+    // IMPORTANT: `last_polled_at` is reused as the GitHub `since` cursor in
+    // the scheduler. Advancing it on failure would skip the unprocessed
+    // activity window forever, so we only update the error + updated_at
+    // timestamps here and leave the cursor untouched. The next tick will
+    // retry from the last successful cursor.
     db.query(`
       UPDATE pr_trackers
-      SET last_polled_at = ?,
-          last_error = ?,
+      SET last_error = ?,
           updated_at = ?
       WHERE id = ?
-    `).run(ts, options.errorMessage ?? "unknown error", ts, id);
+    `).run(options.errorMessage ?? "unknown error", ts, id);
   }
+}
+
+/**
+ * Advance the poll cursor explicitly. Used by the scheduler when it wants to
+ * move the cursor to a time earlier than "now" (e.g. when per-poll caps
+ * leave some PRs unhandled and we need to keep them in the next `since`
+ * window). Safe to call regardless of the current cursor; monotonicity is
+ * the caller's concern.
+ */
+export function setPrTrackerCursor(id: string, cursorMs: number): void {
+  const db = getDatabase();
+  const now = Date.now();
+  db.query(`
+    UPDATE pr_trackers
+    SET last_polled_at = ?,
+        updated_at = ?
+    WHERE id = ?
+  `).run(Math.floor(cursorMs), now, id);
 }
 
 // ---------------------------------------------------------------------------

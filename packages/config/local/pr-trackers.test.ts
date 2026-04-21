@@ -20,6 +20,7 @@ import {
   markPrTrackerPolled,
   recordPrTrackerEvent,
   scanPrTrackers,
+  setPrTrackerCursor,
   updatePrTracker,
   updatePrTrackerSettings,
 } from "./pr-trackers";
@@ -342,5 +343,48 @@ describe("pr-trackers events", () => {
 
     const seen = listProcessedEventIds(id, "comment", ["c1", "c2", "c3"]);
     expect(Array.from(seen).sort()).toEqual(["c1", "c2"]);
+  });
+});
+
+describe("pr-trackers poll cursor semantics", () => {
+  test("markPrTrackerPolled(success) advances last_polled_at", () => {
+    scanPrTrackers(
+      makeProbe({ "/tmp/repos/ode": { host: "github.com", owner: "anomalyco", repo: "ode" } })
+    );
+    const id = listPrTrackers()[0]!.id;
+    const before = Date.now();
+    markPrTrackerPolled(id, { success: true });
+    const after = Date.now();
+    const tracker = getPrTrackerById(id)!;
+    expect(tracker.lastPolledAt!).toBeGreaterThanOrEqual(before);
+    expect(tracker.lastPolledAt!).toBeLessThanOrEqual(after);
+    expect(tracker.lastSuccessAt!).toBeGreaterThanOrEqual(before);
+    expect(tracker.lastError).toBeNull();
+  });
+
+  test("markPrTrackerPolled(failure) leaves last_polled_at untouched", () => {
+    scanPrTrackers(
+      makeProbe({ "/tmp/repos/ode": { host: "github.com", owner: "anomalyco", repo: "ode" } })
+    );
+    const id = listPrTrackers()[0]!.id;
+    // Seed an initial success so we can observe that the next failure
+    // doesn't move the cursor.
+    markPrTrackerPolled(id, { success: true, pollCompletedAt: 1_000_000 });
+    const anchor = getPrTrackerById(id)!.lastPolledAt;
+    expect(anchor).toBe(1_000_000);
+
+    markPrTrackerPolled(id, { success: false, errorMessage: "boom" });
+    const after = getPrTrackerById(id)!;
+    expect(after.lastPolledAt).toBe(1_000_000); // unchanged
+    expect(after.lastError).toBe("boom");
+  });
+
+  test("setPrTrackerCursor writes the cursor verbatim", () => {
+    scanPrTrackers(
+      makeProbe({ "/tmp/repos/ode": { host: "github.com", owner: "anomalyco", repo: "ode" } })
+    );
+    const id = listPrTrackers()[0]!.id;
+    setPrTrackerCursor(id, 42_000);
+    expect(getPrTrackerById(id)!.lastPolledAt).toBe(42_000);
   });
 });

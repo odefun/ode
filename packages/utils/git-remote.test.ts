@@ -84,6 +84,17 @@ describe("parseGitHubRemote", () => {
     expect(parseGitHubRemote("https://codeberg.org/foo/bar")).toBeNull();
   });
 
+  test("rejects look-alike hosts containing the substring 'github'", () => {
+    expect(parseGitHubRemote("https://notgithub.com/foo/bar.git")).toBeNull();
+    expect(parseGitHubRemote("git@evilgithub.org:foo/bar.git")).toBeNull();
+    expect(parseGitHubRemote("https://github-mirror.example.com/foo/bar")).toBeNull();
+  });
+
+  test("accepts github.com subdomains", () => {
+    expect(parseGitHubRemote("https://www.github.com/foo/bar.git")?.host).toBe("www.github.com");
+    expect(parseGitHubRemote("git@ssh.github.com:foo/bar.git")?.host).toBe("ssh.github.com");
+  });
+
   test("handles repo names with dots and dashes", () => {
     expect(parseGitHubRemote("https://github.com/foo/my-repo.js.git")).toEqual({
       host: "github.com",
