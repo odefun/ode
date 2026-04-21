@@ -1,16 +1,29 @@
 import type { IMAdapter } from "@/core/types";
 import { getMessageUpdateIntervalMs } from "@/config";
-import { log } from "@/utils";
+import { BoundedMap, BoundedSet, log } from "@/utils";
 import { CoalescedUpdateQueue } from "@/shared/queue/coalesced-update-queue";
 import { isRateLimitError } from "@/shared/delivery/rate-limit";
+
+/**
+ * Soft cap for the per-daemon record of which messages we have finalized or
+ * hit rate limits on. The runtime is a long-lived singleton (one per daemon,
+ * see `packages/core/kernel/runtime-facade.ts`) so an unbounded Set here leaks
+ * ~40 bytes per finalized message for the life of the daemon.
+ *
+ * A bounded FIFO is fine because the only consumers (`updateMessage`,
+ * `wasRateLimited`, `getRateLimitError`) only care about recent messages — a
+ * message finalized millions of updates ago will not receive further updates.
+ */
+const FINALIZED_SET_MAX_ENTRIES = 5000;
+const RATE_LIMIT_MAP_MAX_ENTRIES = 5000;
 
 export function createRateLimitedImAdapter(
   im: IMAdapter,
   intervalMs = getMessageUpdateIntervalMs()
 ): IMAdapter {
-  const rateLimitedMessages = new Set<string>();
-  const finalizedMessages = new Set<string>();
-  const rateLimitErrors = new Map<string, string>();
+  const rateLimitedMessages = new BoundedSet<string>(FINALIZED_SET_MAX_ENTRIES);
+  const finalizedMessages = new BoundedSet<string>(FINALIZED_SET_MAX_ENTRIES);
+  const rateLimitErrors = new BoundedMap<string, string>(RATE_LIMIT_MAP_MAX_ENTRIES);
   const updateErrors = new Map<string, string>();
 
   function key(channelId: string, messageTs: string): string {

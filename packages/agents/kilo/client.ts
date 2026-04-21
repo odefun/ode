@@ -1,5 +1,5 @@
 import { setThreadSessionId } from "@/config/local/sessions";
-import { log } from "@/utils";
+import { BoundedSet, log } from "@/utils";
 import { buildPromptParts, buildPromptText, buildSystemPrompt, buildSystemWrappedPrompt } from "../shared";
 import {
   CliAgentRuntime,
@@ -63,7 +63,9 @@ type KiloJsonRecord = {
 };
 
 const runtime = new CliAgentRuntime("Kilo");
-const newSessions = new Set<string>();
+/** See note in claude/client.ts — FIFO-bounded so abandoned sessions don't leak. */
+const NEW_SESSIONS_MAX_ENTRIES = 1000;
+const newSessions = new BoundedSet<string>(NEW_SESSIONS_MAX_ENTRIES);
 const kiloSessionPrefix = "ses_";
 
 function resolveKiloBinary(): string {
