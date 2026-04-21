@@ -1,18 +1,23 @@
 <script lang="ts">
+  import { createEventDispatcher } from "svelte";
   import { cn } from "$lib/utils";
 
   // A simple two-state toggle that mirrors the shadcn/Radix "Switch" look.
   // Uses a real <button role="switch"> so it picks up keyboard + a11y for
-  // free; consumers bind a boolean via `checked`.
+  // free; consumers bind a boolean via `checked` and/or listen to the
+  // `change` event (detail = next checked value).
   export let checked = false;
   export let disabled = false;
   export let className = "";
   export let id: string | undefined = undefined;
   export let ariaLabel: string | undefined = undefined;
 
+  const dispatch = createEventDispatcher<{ change: boolean }>();
+
   function toggle(): void {
     if (disabled) return;
     checked = !checked;
+    dispatch("change", checked);
   }
 </script>
 

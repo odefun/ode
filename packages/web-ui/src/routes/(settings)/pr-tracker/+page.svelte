@@ -450,7 +450,7 @@
                     checked={tracker.enabled}
                     disabled={isSaving || tracker.missingSince !== null}
                     ariaLabel={tracker.enabled ? t("Disable", "停用") : t("Enable", "启用")}
-                    on:click={() => void toggleEnabled(tracker)}
+                    on:change={() => void toggleEnabled(tracker)}
                   />
                   <Button
                     type="button"
