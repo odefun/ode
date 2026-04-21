@@ -3,13 +3,11 @@ import type { OpenCodeMessageContext } from "@/agents";
 import {
   getChannelAgentProvider,
   getChannelBaseBranch,
-  getChannelModel,
   getChannelSystemMessage,
   getUserGeneralSettings,
   resolveChannelCwd,
 } from "@/config";
 import {
-  DEFAULT_PR_AGENT_PROVIDER,
   DEFAULT_PR_PROMPT_TEMPLATE,
   getPrTrackerById,
   getPrTrackerSettings,
@@ -32,7 +30,6 @@ import { sendChannelMessage as sendLarkChannelMessage } from "@/ims/lark/client"
 import { sendChannelMessage as sendSlackChannelMessage } from "@/ims/slack/client";
 import {
   type AgentProviderId,
-  isAgentProviderId,
 } from "@/shared/agent-provider";
 import { log } from "@/utils";
 import {
@@ -117,12 +114,9 @@ let prTrackerTimer: ReturnType<typeof setInterval> | null = null;
 const runningTrackerIds = new Set<string>();
 
 function resolveAgentProvider(tracker: PrTrackerRecord): AgentProviderId {
-  const override = tracker.agentProvider?.trim();
-  if (override && isAgentProviderId(override)) return override;
-  const fallback = getPrTrackerSettings().defaultAgentProvider;
-  if (isAgentProviderId(fallback)) return fallback;
-  if (isAgentProviderId(DEFAULT_PR_AGENT_PROVIDER)) return DEFAULT_PR_AGENT_PROVIDER;
-  // Last resort: take the tracker's source channel default.
+  // Tracker poll runs use the source channel's configured default agent.
+  // No tracker-level override; per-channel agent already lives in the channel
+  // settings.
   return getChannelAgentProvider(tracker.sourceChannelId);
 }
 
@@ -141,27 +135,19 @@ function resolveToken(tracker: PrTrackerRecord): string | null {
   });
 }
 
-function resolveTargetPlatform(tracker: PrTrackerRecord): "slack" | "discord" | "lark" {
-  return (tracker.targetPlatform ?? tracker.sourcePlatform) as
-    | "slack"
-    | "discord"
-    | "lark";
-}
-
-async function sendToTargetChannel(
+async function sendToSourceChannel(
   tracker: PrTrackerRecord,
   text: string,
 ): Promise<string | undefined> {
-  if (!tracker.targetChannelId) return undefined;
-  const platform = resolveTargetPlatform(tracker);
+  const platform = tracker.sourcePlatform;
   if (platform === "slack") {
     // Per spec: post as a top-level channel message, not threaded.
-    return await sendSlackChannelMessage(tracker.targetChannelId, text);
+    return await sendSlackChannelMessage(tracker.sourceChannelId, text);
   }
   if (platform === "discord") {
-    return await sendDiscordChannelMessage(tracker.targetChannelId, text);
+    return await sendDiscordChannelMessage(tracker.sourceChannelId, text);
   }
-  return await sendLarkChannelMessage(tracker.targetChannelId, text);
+  return await sendLarkChannelMessage(tracker.sourceChannelId, text);
 }
 
 function syntheticThreadIdForPr(trackerId: string, prNumber: number, ts: number): string {
@@ -307,10 +293,10 @@ async function runForPr(tracker: PrTrackerRecord, summary: PrSummary): Promise<v
     )}> in ${repoFullName}`;
     // Slack-only mrkdwn link; Discord/Lark receive the URL inline.
     const bodyHeader =
-      tracker.targetPlatform === "slack"
+      tracker.sourcePlatform === "slack"
         ? header
         : `PR update: #${summary.prNumber} ${summary.title} (${summary.url}) in ${repoFullName}`;
-    await sendToTargetChannel(tracker, `${bodyHeader}\n\n${finalText}`);
+    await sendToSourceChannel(tracker, `${bodyHeader}\n\n${finalText}`);
 
     // Record per-event dedupe rows + an aggregate row.
     for (const event of summary.events) {
@@ -422,19 +408,6 @@ export async function pollTracker(trackerId: string): Promise<PrPollOutcome> {
       prsHandled: 0,
       prsSkipped: 0,
       error: "tracker disabled",
-    };
-  }
-  if (!tracker.targetChannelId) {
-    markPrTrackerPolled(tracker.id, {
-      success: false,
-      errorMessage: "target channel not configured",
-    });
-    return {
-      trackerId,
-      prsScanned: 0,
-      prsHandled: 0,
-      prsSkipped: 0,
-      error: "no target channel",
     };
   }
 

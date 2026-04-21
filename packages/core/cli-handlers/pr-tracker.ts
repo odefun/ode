@@ -103,16 +103,12 @@ function printTrackerRow(tracker: PrTrackerRecord): void {
       ? "enabled"
       : "disabled";
   const source = `${tracker.sourceWorkspaceName || tracker.sourceWorkspaceId}/${tracker.sourceChannelName || tracker.sourceChannelId}`;
-  const target = tracker.targetChannelId
-    ? `${tracker.targetChannelName || tracker.targetChannelId}`
-    : "(none)";
   console.log(
     [
       tracker.id,
       state.padEnd(9),
       `${tracker.repoOwner}/${tracker.repoName}`.padEnd(32),
-      `from=${source}`,
-      `to=${target}`,
+      `channel=${source}`,
       `lastPoll=${formatTimestamp(tracker.lastPolledAt)}`,
     ].join("  "),
   );
@@ -124,15 +120,9 @@ function printTrackerDetail(tracker: PrTrackerRecord, settings?: PrTrackerSettin
   console.log(`enabled:          ${tracker.enabled}`);
   console.log(`missingSince:     ${formatTimestamp(tracker.missingSince)}`);
   console.log(
-    `sourceChannel:    ${tracker.sourceWorkspaceName || tracker.sourceWorkspaceId} / ${tracker.sourceChannelName || tracker.sourceChannelId} (${tracker.sourceChannelId})`,
+    `channel:          ${tracker.sourceWorkspaceName || tracker.sourceWorkspaceId} / ${tracker.sourceChannelName || tracker.sourceChannelId} (${tracker.sourceChannelId})`,
   );
   console.log(`workingDirectory: ${tracker.workingDirectory}`);
-  console.log(
-    `targetChannel:    ${tracker.targetChannelId ? `${tracker.targetChannelName || tracker.targetChannelId} (${tracker.targetChannelId})` : "(none)"}`,
-  );
-  console.log(
-    `agent:            ${tracker.agentProvider ?? `(default: ${settings?.defaultAgentProvider ?? "opencode"})`}`,
-  );
   console.log(
     `pollIntervalSec:  ${tracker.pollIntervalSec ?? `(default: ${settings?.defaultPollIntervalSec ?? "-"})`}`,
   );
@@ -170,21 +160,22 @@ function printHelp(): void {
       "  ode pr-tracker list [--enabled | --disabled | --missing] [--json]",
       "  ode pr-tracker show <id> [--json]",
       "  ode pr-tracker scan [--json]",
-      "  ode pr-tracker enable <id> [--target-channel <channelId>]",
+      "  ode pr-tracker enable <id>",
       "  ode pr-tracker disable <id>",
-      "  ode pr-tracker update <id> [--agent <provider>] [--prompt <text>] [--prompt-file <path>]",
-      "                             [--interval <seconds>] [--token <token>] [--target-channel <channelId>]",
+      "  ode pr-tracker update <id> [--prompt <text>] [--prompt-file <path>]",
+      "                             [--interval <seconds>] [--token <token>]",
       "  ode pr-tracker run <id>",
       "  ode pr-tracker delete <id>",
       "  ode pr-tracker events <id> [--limit N] [--json]",
-      "  ode pr-tracker settings [--show | --set-interval <seconds> | --set-agent <provider>",
+      "  ode pr-tracker settings [--show | --set-interval <seconds>",
       "                           --set-prompt-file <path> | --set-token <token>]",
       "",
       "Notes:",
       "  Tracker rows are populated by `ode pr-tracker scan`, which walks every",
       "  configured channel's workingDirectory and extracts GitHub repos from",
       "  the origin remote. Each tracker is disabled by default.",
-      "  Enabling a tracker requires a --target-channel (where the agent posts results).",
+      "  Poll results are posted back to the source channel using its configured",
+      "  default agent.",
     ].join("\n"),
   );
 }
@@ -195,7 +186,6 @@ function printHelp(): void {
 
 type ListPayload = {
   trackers: PrTrackerRecord[];
-  channels: Array<{ value: string; label: string }>;
   settings: PrTrackerSettings;
 };
 
@@ -258,21 +248,15 @@ async function handleScan(args: CliArgs): Promise<void> {
 
 async function handleUpdate(args: CliArgs, idFromCmd?: string): Promise<PrTrackerRecord> {
   const { flags, positional } = parseFlags(args, {
-    agent: true,
     prompt: true,
     "prompt-file": true,
     interval: true,
     token: true,
-    "target-channel": true,
   });
   const id = idFromCmd ?? positional[0];
   if (!id) throw new Error("Tracker id is required");
 
   const body: Record<string, unknown> = {};
-  if (flags.agent !== undefined) {
-    const raw = (flags.agent as string).trim().toLowerCase();
-    body.agentProvider = raw === "default" ? null : raw;
-  }
   if (flags["prompt-file"] !== undefined) {
     const file = Bun.file(flags["prompt-file"] as string);
     body.promptTemplate = (await file.text()).trim();
@@ -288,10 +272,6 @@ async function handleUpdate(args: CliArgs, idFromCmd?: string): Promise<PrTracke
   if (flags.token !== undefined) {
     body.githubToken = (flags.token as string) || null;
   }
-  if (flags["target-channel"] !== undefined) {
-    const raw = (flags["target-channel"] as string).trim();
-    body.targetChannelId = raw.length === 0 ? null : raw;
-  }
 
   const result = await apiFetch<{ tracker: PrTrackerRecord; settings: PrTrackerSettings }>(
     `/api/pr-trackers/${encodeURIComponent(id)}`,
@@ -305,19 +285,15 @@ async function handleUpdate(args: CliArgs, idFromCmd?: string): Promise<PrTracke
 }
 
 async function handleEnable(args: CliArgs): Promise<void> {
-  const { flags, positional } = parseFlags(args, { "target-channel": true });
+  const { positional } = parseFlags(args, {});
   const id = positional[0];
   if (!id) throw new Error("Tracker id is required: ode pr-tracker enable <id>");
-  const body: Record<string, unknown> = { enabled: true };
-  if (flags["target-channel"] !== undefined) {
-    body.targetChannelId = (flags["target-channel"] as string).trim() || null;
-  }
   const result = await apiFetch<{ tracker: PrTrackerRecord }>(
     `/api/pr-trackers/${encodeURIComponent(id)}`,
     {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ enabled: true }),
     },
   );
   console.log(`Tracker ${id} enabled.`);
@@ -383,14 +359,12 @@ async function handleSettings(args: CliArgs): Promise<void> {
   const { flags } = parseFlags(args, {
     show: false,
     "set-interval": true,
-    "set-agent": true,
     "set-prompt-file": true,
     "set-token": true,
   });
 
   const mutates =
     flags["set-interval"] !== undefined ||
-    flags["set-agent"] !== undefined ||
     flags["set-prompt-file"] !== undefined ||
     flags["set-token"] !== undefined;
 
@@ -400,9 +374,6 @@ async function handleSettings(args: CliArgs): Promise<void> {
       const n = Number(flags["set-interval"]);
       if (!Number.isFinite(n)) throw new Error("--set-interval must be a number");
       body.defaultPollIntervalSec = n;
-    }
-    if (flags["set-agent"] !== undefined) {
-      body.defaultAgentProvider = (flags["set-agent"] as string).trim();
     }
     if (flags["set-prompt-file"] !== undefined) {
       const file = Bun.file(flags["set-prompt-file"] as string);

@@ -7,7 +7,6 @@ import type { GitHubRepo } from "@/utils/git-remote";
 import {
   clearPrTrackersForTests,
   closePrTrackerDatabaseForTests,
-  DEFAULT_PR_AGENT_PROVIDER,
   DEFAULT_PR_POLL_INTERVAL_SEC,
   DEFAULT_PR_PROMPT_TEMPLATE,
   deletePrTracker,
@@ -111,7 +110,6 @@ describe("pr-trackers settings", () => {
   test("returns defaults on first access", () => {
     const settings = getPrTrackerSettings();
     expect(settings.defaultPollIntervalSec).toBe(DEFAULT_PR_POLL_INTERVAL_SEC);
-    expect(settings.defaultAgentProvider).toBe(DEFAULT_PR_AGENT_PROVIDER);
     expect(settings.defaultPromptTemplate).toBe(DEFAULT_PR_PROMPT_TEMPLATE);
     expect(settings.defaultGithubToken).toBe("");
   });
@@ -119,23 +117,15 @@ describe("pr-trackers settings", () => {
   test("updates persist", () => {
     updatePrTrackerSettings({
       defaultPollIntervalSec: 600,
-      defaultAgentProvider: "claudecode",
       defaultGithubToken: " ghp_abc ",
     });
     const settings = getPrTrackerSettings();
     expect(settings.defaultPollIntervalSec).toBe(600);
-    expect(settings.defaultAgentProvider).toBe("claudecode");
     expect(settings.defaultGithubToken).toBe("ghp_abc");
   });
 
   test("rejects too-short poll interval", () => {
     expect(() => updatePrTrackerSettings({ defaultPollIntervalSec: 30 })).toThrow();
-  });
-
-  test("rejects invalid agent provider", () => {
-    expect(() =>
-      updatePrTrackerSettings({ defaultAgentProvider: "bogus" })
-    ).toThrow(/Unsupported agent/);
   });
 });
 
@@ -206,14 +196,13 @@ describe("pr-trackers scan", () => {
 });
 
 describe("pr-trackers enable/update", () => {
-  test("enabling without a target channel throws", () => {
+  test("enabling a scanned tracker does not require any extra config", () => {
     scanPrTrackers(
       makeProbe({ "/tmp/repos/ode": { host: "github.com", owner: "anomalyco", repo: "ode" } })
     );
     const tracker = listPrTrackers()[0]!;
-    expect(() => updatePrTracker(tracker.id, { enabled: true })).toThrow(
-      /target channel/
-    );
+    const updated = updatePrTracker(tracker.id, { enabled: true });
+    expect(updated.enabled).toBe(true);
   });
 
   test("first enable snaps last_polled_at to now so we don't backfill", () => {
@@ -226,12 +215,10 @@ describe("pr-trackers enable/update", () => {
     const before = Date.now();
     const updated = updatePrTracker(tracker.id, {
       enabled: true,
-      targetChannelId: "C_WEB",
     });
     const after = Date.now();
 
     expect(updated.enabled).toBe(true);
-    expect(updated.targetChannelId).toBe("C_WEB");
     expect(updated.lastPolledAt).not.toBeNull();
     expect(updated.lastPolledAt!).toBeGreaterThanOrEqual(before);
     expect(updated.lastPolledAt!).toBeLessThanOrEqual(after);
@@ -242,7 +229,7 @@ describe("pr-trackers enable/update", () => {
       makeProbe({ "/tmp/repos/ode": { host: "github.com", owner: "anomalyco", repo: "ode" } })
     );
     const id = listPrTrackers()[0]!.id;
-    const enabled = updatePrTracker(id, { enabled: true, targetChannelId: "C_DEV" });
+    const enabled = updatePrTracker(id, { enabled: true });
     const originalCursor = enabled.lastPolledAt!;
 
     updatePrTracker(id, { enabled: false });
@@ -251,7 +238,7 @@ describe("pr-trackers enable/update", () => {
     const afterPoll = getPrTrackerById(id)!;
     expect(afterPoll.lastPolledAt).toBe(originalCursor + 10_000);
 
-    const reEnabled = updatePrTracker(id, { enabled: true, targetChannelId: "C_DEV" });
+    const reEnabled = updatePrTracker(id, { enabled: true });
     expect(reEnabled.lastPolledAt).toBe(originalCursor + 10_000);
   });
 
@@ -262,7 +249,7 @@ describe("pr-trackers enable/update", () => {
     scanPrTrackers(makeProbe({}));
     const id = listPrTrackers()[0]!.id;
     expect(() =>
-      updatePrTracker(id, { enabled: true, targetChannelId: "C_DEV" })
+      updatePrTracker(id, { enabled: true })
     ).toThrow(/missing/);
   });
 
@@ -289,7 +276,7 @@ describe("pr-trackers due selection", () => {
       makeProbe({ "/tmp/repos/ode": { host: "github.com", owner: "anomalyco", repo: "ode" } })
     );
     const id = listPrTrackers()[0]!.id;
-    updatePrTracker(id, { enabled: true, targetChannelId: "C_DEV", pollIntervalSec: 60 });
+    updatePrTracker(id, { enabled: true, pollIntervalSec: 60 });
     // Simulate a very old last-poll timestamp.
     markPrTrackerPolled(id, { success: true, pollCompletedAt: 0 });
     const due = listDuePrTrackers(Date.now());
@@ -301,7 +288,7 @@ describe("pr-trackers due selection", () => {
       makeProbe({ "/tmp/repos/ode": { host: "github.com", owner: "anomalyco", repo: "ode" } })
     );
     const id = listPrTrackers()[0]!.id;
-    updatePrTracker(id, { enabled: true, targetChannelId: "C_DEV", pollIntervalSec: 1800 });
+    updatePrTracker(id, { enabled: true, pollIntervalSec: 1800 });
     markPrTrackerPolled(id, { success: true });
     expect(listDuePrTrackers(Date.now())).toHaveLength(0);
   });

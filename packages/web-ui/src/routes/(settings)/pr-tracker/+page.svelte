@@ -1,13 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { ChevronDown, ChevronRight, Play, RefreshCw, Trash2 } from "lucide-svelte";
-  import { Badge, Button, Card, Input, Label, Select, Textarea } from "$lib/components/ui";
+  import { Badge, Button, Card, Input, Label, Switch, Textarea } from "$lib/components/ui";
   import { locale } from "$lib/i18n";
-  import {
-    AGENT_PROVIDERS,
-    AGENT_PROVIDER_LABELS,
-    type AgentProviderId,
-  } from "@/shared/agent-provider";
 
   type PrTrackerPlatform = "slack" | "discord" | "lark";
 
@@ -23,14 +18,9 @@
     repoName: string;
     repoHost: string;
     enabled: boolean;
-    agentProvider: string | null;
     promptTemplate: string | null;
     pollIntervalSec: number | null;
     githubToken: string | null;
-    targetWorkspaceId: string | null;
-    targetChannelId: string | null;
-    targetChannelName: string | null;
-    targetPlatform: PrTrackerPlatform | null;
     lastPolledAt: number | null;
     lastSuccessAt: number | null;
     lastError: string | null;
@@ -39,18 +29,8 @@
     updatedAt: number;
   };
 
-  type ChannelOption = {
-    value: string;
-    label: string;
-    channelId: string;
-    channelName: string;
-    workspaceId: string;
-    workspaceName: string;
-  };
-
   type PrTrackerSettings = {
     defaultPollIntervalSec: number;
-    defaultAgentProvider: string;
     defaultPromptTemplate: string;
     defaultGithubToken: string;
     updatedAt: number;
@@ -58,12 +38,10 @@
 
   type ListPayload = {
     trackers: PrTrackerRecord[];
-    channels: ChannelOption[];
     settings: PrTrackerSettings;
   };
 
   let trackers = $state<PrTrackerRecord[]>([]);
-  let channels = $state<ChannelOption[]>([]);
   let settings = $state<PrTrackerSettings | null>(null);
   let isLoading = $state(false);
   let isSaving = $state(false);
@@ -72,9 +50,9 @@
   let runningIds = $state<Set<string>>(new Set());
   let expandedIds = $state<Set<string>>(new Set());
 
-  // Settings form.
-  let formDefaultInterval = $state(1800);
-  let formDefaultAgent = $state("");
+  // Settings form. Interval is exposed in minutes for a nicer UI; the API still
+  // stores seconds, so we multiply by 60 on submit and divide on load.
+  let formDefaultIntervalMin = $state(30);
   let formDefaultPrompt = $state("");
   let formDefaultToken = $state("");
   let isSettingsOpen = $state(false);
@@ -99,6 +77,11 @@
     return `${Math.floor(hours / 24)}${t("d ago", " 天前")}`;
   }
 
+  function secondsToMinutes(sec: number | null | undefined): number {
+    if (!sec || !Number.isFinite(sec)) return 0;
+    return Math.max(1, Math.round(sec / 60));
+  }
+
   async function loadTrackers(): Promise<void> {
     isLoading = true;
     message = "";
@@ -109,10 +92,8 @@
         throw new Error(payload.error || `HTTP ${res.status}`);
       }
       trackers = payload.result.trackers;
-      channels = payload.result.channels;
       settings = payload.result.settings;
-      formDefaultInterval = settings.defaultPollIntervalSec;
-      formDefaultAgent = settings.defaultAgentProvider;
+      formDefaultIntervalMin = secondsToMinutes(settings.defaultPollIntervalSec);
       formDefaultPrompt = settings.defaultPromptTemplate;
       formDefaultToken = settings.defaultGithubToken;
     } catch (error) {
@@ -136,7 +117,6 @@
         throw new Error(payload.error || `HTTP ${res.status}`);
       }
       trackers = payload.result.trackers;
-      channels = payload.result.channels;
       settings = payload.result.settings;
       const s = payload.result.scan;
       message = t(
@@ -156,11 +136,9 @@
     try {
       const body: Record<string, unknown> = {};
       if ("enabled" in patch) body.enabled = patch.enabled;
-      if ("agentProvider" in patch) body.agentProvider = patch.agentProvider;
       if ("promptTemplate" in patch) body.promptTemplate = patch.promptTemplate;
       if ("pollIntervalSec" in patch) body.pollIntervalSec = patch.pollIntervalSec;
       if ("githubToken" in patch) body.githubToken = patch.githubToken;
-      if ("targetChannelId" in patch) body.targetChannelId = patch.targetChannelId;
       const res = await fetch(`/api/pr-trackers/${encodeURIComponent(tracker.id)}`, {
         method: "PUT",
         headers: { "content-type": "application/json" },
@@ -183,14 +161,6 @@
   }
 
   async function toggleEnabled(tracker: PrTrackerRecord): Promise<void> {
-    if (!tracker.enabled && !tracker.targetChannelId) {
-      message = t(
-        "Pick a target channel before enabling this tracker.",
-        "启用前请先选择目标频道。",
-      );
-      expandedIds = new Set([...expandedIds, tracker.id]);
-      return;
-    }
     await saveTracker(tracker, { enabled: !tracker.enabled });
   }
 
@@ -243,12 +213,16 @@
     isSaving = true;
     message = "";
     try {
+      const intervalMin = Number(formDefaultIntervalMin);
+      if (!Number.isFinite(intervalMin) || intervalMin < 1) {
+        message = t("Poll interval must be at least 1 minute.", "轮询间隔至少 1 分钟。");
+        return;
+      }
       const res = await fetch("/api/pr-trackers/settings", {
         method: "PUT",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          defaultPollIntervalSec: formDefaultInterval,
-          defaultAgentProvider: formDefaultAgent,
+          defaultPollIntervalSec: Math.round(intervalMin * 60),
           defaultPromptTemplate: formDefaultPrompt,
           defaultGithubToken: formDefaultToken,
         }),
@@ -258,6 +232,7 @@
         throw new Error(payload.error || `HTTP ${res.status}`);
       }
       settings = payload.result.settings;
+      formDefaultIntervalMin = secondsToMinutes(settings.defaultPollIntervalSec);
       message = t("Settings saved.", "设置已保存。");
     } catch (error) {
       message = t("Save failed: ", "保存失败：") + String(error);
@@ -274,40 +249,40 @@
   }
 
   // Local editable copies keyed by tracker id, so edits don't flicker while typing.
+  // `pollIntervalMin` stores the minutes the user typed; blank means "use default".
   const drafts = $state<Record<string, {
-    agentProvider: string;
     promptTemplate: string;
-    pollIntervalSec: string;
+    pollIntervalMin: string;
     githubToken: string;
-    targetChannelId: string;
   }>>({});
 
   function ensureDraft(tracker: PrTrackerRecord): void {
     if (drafts[tracker.id]) return;
     drafts[tracker.id] = {
-      agentProvider: tracker.agentProvider ?? "",
       promptTemplate: tracker.promptTemplate ?? "",
-      pollIntervalSec: tracker.pollIntervalSec != null ? String(tracker.pollIntervalSec) : "",
+      pollIntervalMin:
+        tracker.pollIntervalSec != null ? String(secondsToMinutes(tracker.pollIntervalSec)) : "",
       githubToken: tracker.githubToken ?? "",
-      targetChannelId: tracker.targetChannelId ?? "",
     };
   }
 
   async function applyDraft(tracker: PrTrackerRecord): Promise<void> {
     const draft = drafts[tracker.id];
     if (!draft) return;
-    const intervalTrim = draft.pollIntervalSec.trim();
-    const interval = intervalTrim === "" ? null : Number(intervalTrim);
-    if (interval !== null && (!Number.isFinite(interval) || interval < 60)) {
-      message = t("Poll interval must be a number ≥ 60.", "轮询间隔必须是 ≥ 60 的数字。");
-      return;
+    const minTrim = draft.pollIntervalMin.trim();
+    let intervalSec: number | null = null;
+    if (minTrim !== "") {
+      const minutes = Number(minTrim);
+      if (!Number.isFinite(minutes) || minutes < 1) {
+        message = t("Poll interval must be ≥ 1 minute.", "轮询间隔必须 ≥ 1 分钟。");
+        return;
+      }
+      intervalSec = Math.round(minutes * 60);
     }
     await saveTracker(tracker, {
-      agentProvider: draft.agentProvider.trim() || null,
       promptTemplate: draft.promptTemplate.trim() === "" ? null : draft.promptTemplate,
-      pollIntervalSec: interval,
+      pollIntervalSec: intervalSec,
       githubToken: draft.githubToken.trim() === "" ? null : draft.githubToken,
-      targetChannelId: draft.targetChannelId.trim() === "" ? null : draft.targetChannelId,
     });
   }
 
@@ -339,8 +314,8 @@
       <h2 class="text-xl font-semibold tracking-tight">{t("PR Tracker", "PR 追踪")}</h2>
       <p class="mt-1 text-sm text-[hsl(var(--muted-foreground))]">
         {t(
-          "Watch GitHub repos discovered from each channel's working directory. When enabled, new PR activity triggers an agent run in the target channel.",
-          "基于每个频道的工作目录自动发现 GitHub 仓库。启用后，PR 新活动会触发目标频道里的一次 agent 调用。",
+          "Watch GitHub repos discovered from each channel's working directory. When enabled, new PR activity triggers an agent run in that channel.",
+          "基于每个频道的工作目录自动发现 GitHub 仓库。启用后，PR 新活动会触发该频道里的一次 agent 调用。",
         )}
       </p>
     </div>
@@ -378,8 +353,7 @@
       </div>
       {#if settings}
         <span class="text-xs text-[hsl(var(--muted-foreground))]">
-          {t("Interval", "间隔")}: {settings.defaultPollIntervalSec}s ·
-          {t("Agent", "Agent")}: {settings.defaultAgentProvider} ·
+          {t("Interval", "间隔")}: {secondsToMinutes(settings.defaultPollIntervalSec)} {t("min", "分钟")} ·
           {t("Token", "Token")}: {settings.defaultGithubToken ? t("set", "已配置") : t("gh CLI fallback", "回退 gh CLI")}
         </span>
       {/if}
@@ -387,22 +361,14 @@
     {#if isSettingsOpen}
       <div class="mt-4 grid gap-3">
         <div class="grid gap-1">
-          <Label for="pt-default-interval">{t("Default poll interval (seconds)", "默认轮询间隔（秒）")}</Label>
+          <Label for="pt-default-interval">{t("Default poll interval (minutes)", "默认轮询间隔（分钟）")}</Label>
           <Input
             id="pt-default-interval"
             type="number"
-            min="60"
-            step="60"
-            bind:value={formDefaultInterval}
+            min="1"
+            step="1"
+            bind:value={formDefaultIntervalMin}
           />
-        </div>
-        <div class="grid gap-1">
-          <Label for="pt-default-agent">{t("Default agent", "默认 Agent")}</Label>
-          <Select id="pt-default-agent" bind:value={formDefaultAgent}>
-            {#each AGENT_PROVIDERS as provider (provider)}
-              <option value={provider}>{AGENT_PROVIDER_LABELS[provider as AgentProviderId]}</option>
-            {/each}
-          </Select>
         </div>
         <div class="grid gap-1">
           <Label for="pt-default-token">{t("Default GitHub token (blank = fall back to `gh auth token`)", "默认 GitHub Token（留空则回退到 `gh auth token`）")}</Label>
@@ -420,6 +386,12 @@
             {t(
               "Available variables: {{repo_full_name}}, {{pr_number}}, {{pr_title}}, {{pr_url}}, {{pr_author}}, {{pr_state}}, {{pr_head_ref}}, {{pr_base_ref}}, {{new_events_summary}}",
               "可用变量：{{repo_full_name}}、{{pr_number}}、{{pr_title}}、{{pr_url}}、{{pr_author}}、{{pr_state}}、{{pr_head_ref}}、{{pr_base_ref}}、{{new_events_summary}}",
+            )}
+          </p>
+          <p class="text-xs text-[hsl(var(--muted-foreground))]">
+            {t(
+              "Each channel can override this prompt to match the repo's conventions.",
+              "每个频道可以单独覆盖这个 Prompt，以匹配各自仓库的习惯。",
             )}
           </p>
         </div>
@@ -466,52 +438,54 @@
                   <div class="mt-1 text-xs text-[hsl(var(--muted-foreground))]">
                     <div>{t("cwd", "工作目录")}: <code>{tracker.workingDirectory}</code></div>
                     <div>
-                      {t("target", "目标频道")}:
-                      {#if tracker.targetChannelId}
-                        <code>{tracker.targetChannelName || tracker.targetChannelId}</code>
-                      {:else}
-                        <span class="text-[hsl(var(--destructive))]">{t("(not set)", "（未配置）")}</span>
-                      {/if}
-                      · {t("last poll", "最近轮询")}: {formatRelative(tracker.lastPolledAt)}
+                      {t("last poll", "最近轮询")}: {formatRelative(tracker.lastPolledAt)}
                       {#if tracker.lastError}
                         · <span class="text-[hsl(var(--destructive))]">{tracker.lastError}</span>
                       {/if}
                     </div>
                   </div>
                 </div>
-                <div class="flex shrink-0 items-center gap-1">
+                <div class="flex shrink-0 items-center gap-2">
+                  <Switch
+                    checked={tracker.enabled}
+                    disabled={isSaving || tracker.missingSince !== null}
+                    ariaLabel={tracker.enabled ? t("Disable", "停用") : t("Enable", "启用")}
+                    on:click={() => void toggleEnabled(tracker)}
+                  />
                   <Button
                     type="button"
                     variant="outline"
+                    size="sm"
+                    className="h-8 w-8 p-0"
                     on:click={() => void runNow(tracker)}
                     disabled={!tracker.enabled || runningIds.has(tracker.id) || tracker.missingSince !== null}
                     title={t("Poll now", "立即轮询")}
                   >
-                    <Play class="h-4 w-4" />
+                    <Play class="h-3.5 w-3.5" />
                   </Button>
                   <Button
                     type="button"
-                    variant={tracker.enabled ? "secondary" : "default"}
-                    on:click={() => void toggleEnabled(tracker)}
-                    disabled={isSaving || tracker.missingSince !== null}
+                    variant="outline"
+                    size="sm"
+                    className="h-8 w-8 p-0"
+                    on:click={() => toggleExpanded(tracker.id)}
                   >
-                    {tracker.enabled ? t("Disable", "停用") : t("Enable", "启用")}
-                  </Button>
-                  <Button type="button" variant="outline" on:click={() => toggleExpanded(tracker.id)}>
                     {#if expandedIds.has(tracker.id)}
-                      <ChevronDown class="h-4 w-4" />
+                      <ChevronDown class="h-3.5 w-3.5" />
                     {:else}
-                      <ChevronRight class="h-4 w-4" />
+                      <ChevronRight class="h-3.5 w-3.5" />
                     {/if}
                   </Button>
                   <Button
                     type="button"
                     variant="destructive"
+                    size="sm"
+                    className="h-8 w-8 p-0"
                     on:click={() => void deleteTracker(tracker)}
                     disabled={isSaving}
                     title={t("Delete tracker", "删除追踪器")}
                   >
-                    <Trash2 class="h-4 w-4" />
+                    <Trash2 class="h-3.5 w-3.5" />
                   </Button>
                 </div>
               </div>
@@ -519,31 +493,13 @@
               {#if expandedIds.has(tracker.id) && drafts[tracker.id]}
                 <div class="mt-4 grid gap-3 border-t border-[hsl(var(--border)/0.7)] pt-4">
                   <div class="grid gap-1">
-                    <Label for={`pt-target-${tracker.id}`}>{t("Target channel", "目标频道")}</Label>
-                    <Select id={`pt-target-${tracker.id}`} bind:value={drafts[tracker.id]!.targetChannelId}>
-                      <option value="">{t("(not set)", "（未配置）")}</option>
-                      {#each channels as channel (channel.value)}
-                        <option value={channel.value}>{channel.label}</option>
-                      {/each}
-                    </Select>
-                  </div>
-                  <div class="grid gap-1">
-                    <Label for={`pt-agent-${tracker.id}`}>{t("Agent", "Agent")}</Label>
-                    <Select id={`pt-agent-${tracker.id}`} bind:value={drafts[tracker.id]!.agentProvider}>
-                      <option value="">{t("(use default)", "（使用默认）")}</option>
-                      {#each AGENT_PROVIDERS as provider (provider)}
-                        <option value={provider}>{AGENT_PROVIDER_LABELS[provider as AgentProviderId]}</option>
-                      {/each}
-                    </Select>
-                  </div>
-                  <div class="grid gap-1">
-                    <Label for={`pt-interval-${tracker.id}`}>{t("Poll interval (seconds, blank = default)", "轮询间隔（秒，留空用默认）")}</Label>
+                    <Label for={`pt-interval-${tracker.id}`}>{t("Poll interval (minutes, blank = default)", "轮询间隔（分钟，留空用默认）")}</Label>
                     <Input
                       id={`pt-interval-${tracker.id}`}
                       type="number"
-                      min="60"
-                      step="60"
-                      bind:value={drafts[tracker.id]!.pollIntervalSec}
+                      min="1"
+                      step="1"
+                      bind:value={drafts[tracker.id]!.pollIntervalMin}
                     />
                   </div>
                   <div class="grid gap-1">

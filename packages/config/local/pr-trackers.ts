@@ -2,7 +2,6 @@ import { Database } from "bun:sqlite";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { AGENT_PROVIDERS, isAgentProviderId } from "@/shared/agent-provider";
 import { getGitHubRepoFromCwd, type GitHubRepo } from "@/utils/git-remote";
 import { loadOdeConfig } from "./ode-store";
 
@@ -25,7 +24,7 @@ export type PrTrackerPlatform = "slack" | "discord" | "lark";
 
 export type PrTrackerRecord = {
   id: string;
-  /** Source channel: where the working directory comes from. */
+  /** Source channel: where the working directory comes from and where poll results are posted back. */
   sourceWorkspaceId: string;
   sourceWorkspaceName: string | null;
   sourceChannelId: string;
@@ -37,18 +36,11 @@ export type PrTrackerRecord = {
   repoHost: string;
   enabled: boolean;
   /** Null = use global default. */
-  agentProvider: string | null;
-  /** Null = use global default. */
   promptTemplate: string | null;
   /** Null = use global default. */
   pollIntervalSec: number | null;
   /** Null = use global default token / gh CLI fallback. */
   githubToken: string | null;
-  /** Where the agent result is posted. Required to be set before enable. */
-  targetWorkspaceId: string | null;
-  targetChannelId: string | null;
-  targetChannelName: string | null;
-  targetPlatform: PrTrackerPlatform | null;
   /**
    * Cursor: last successful poll completion. The next poll asks GitHub for
    * comments/reviews `since` this timestamp. Set to `now` when the tracker
@@ -86,7 +78,6 @@ export type PrTrackerEventRecord = {
 
 export type PrTrackerSettings = {
   defaultPollIntervalSec: number;
-  defaultAgentProvider: string;
   defaultPromptTemplate: string;
   /** Optional global GitHub token. Empty string = fall back to `gh auth token`. */
   defaultGithubToken: string;
@@ -94,7 +85,6 @@ export type PrTrackerSettings = {
 };
 
 export const DEFAULT_PR_POLL_INTERVAL_SEC = 30 * 60; // 30 minutes
-export const DEFAULT_PR_AGENT_PROVIDER = "opencode";
 export const DEFAULT_PR_PROMPT_TEMPLATE = `A pull request in {{repo_full_name}} has new activity:
 PR #{{pr_number}}: {{pr_title}} by {{pr_author}}
 URL: {{pr_url}}
@@ -197,7 +187,7 @@ function initializeDatabase(db: Database): void {
     CREATE TABLE IF NOT EXISTS pr_tracker_settings (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       default_poll_interval_sec INTEGER NOT NULL,
-      default_agent_provider TEXT NOT NULL,
+      default_agent_provider TEXT NOT NULL DEFAULT 'opencode',
       default_prompt_template TEXT NOT NULL,
       default_github_token TEXT NOT NULL DEFAULT '',
       updated_at INTEGER NOT NULL
@@ -242,14 +232,11 @@ type PrTrackerRow = {
   repo_name: string;
   repo_host: string;
   enabled: number;
-  agent_provider: string | null;
+  // Legacy columns (`agent_provider`, `target_*`) are kept on disk for
+  // backwards compatibility with existing DBs but are no longer read.
   prompt_template: string | null;
   poll_interval_sec: number | null;
   github_token: string | null;
-  target_workspace_id: string | null;
-  target_channel_id: string | null;
-  target_channel_name: string | null;
-  target_platform: PrTrackerPlatform | null;
   last_polled_at: number | null;
   last_success_at: number | null;
   last_error: string | null;
@@ -271,14 +258,9 @@ function mapTrackerRow(row: PrTrackerRow): PrTrackerRecord {
     repoName: row.repo_name,
     repoHost: row.repo_host,
     enabled: row.enabled === 1,
-    agentProvider: row.agent_provider,
     promptTemplate: row.prompt_template,
     pollIntervalSec: row.poll_interval_sec,
     githubToken: row.github_token,
-    targetWorkspaceId: row.target_workspace_id,
-    targetChannelId: row.target_channel_id,
-    targetChannelName: row.target_channel_name,
-    targetPlatform: row.target_platform,
     lastPolledAt: row.last_polled_at,
     lastSuccessAt: row.last_success_at,
     lastError: row.last_error,
@@ -332,10 +314,9 @@ function ensureSettingsRow(db: Database): void {
       default_prompt_template,
       default_github_token,
       updated_at
-    ) VALUES (1, ?, ?, ?, '', ?)
+    ) VALUES (1, ?, 'opencode', ?, '', ?)
   `).run(
     DEFAULT_PR_POLL_INTERVAL_SEC,
-    DEFAULT_PR_AGENT_PROVIDER,
     DEFAULT_PR_PROMPT_TEMPLATE,
     now
   );
@@ -348,7 +329,6 @@ export function getPrTrackerSettings(): PrTrackerSettings {
     .query(`
       SELECT
         default_poll_interval_sec,
-        default_agent_provider,
         default_prompt_template,
         default_github_token,
         updated_at
@@ -357,14 +337,12 @@ export function getPrTrackerSettings(): PrTrackerSettings {
     `)
     .get() as {
       default_poll_interval_sec: number;
-      default_agent_provider: string;
       default_prompt_template: string;
       default_github_token: string;
       updated_at: number;
     };
   return {
     defaultPollIntervalSec: row.default_poll_interval_sec,
-    defaultAgentProvider: row.default_agent_provider,
     defaultPromptTemplate: row.default_prompt_template,
     defaultGithubToken: row.default_github_token,
     updatedAt: row.updated_at,
@@ -373,7 +351,6 @@ export function getPrTrackerSettings(): PrTrackerSettings {
 
 export type UpdatePrTrackerSettingsParams = Partial<{
   defaultPollIntervalSec: number;
-  defaultAgentProvider: string;
   defaultPromptTemplate: string;
   defaultGithubToken: string;
 }>;
@@ -389,10 +366,6 @@ export function updatePrTrackerSettings(
     params.defaultPollIntervalSec !== undefined
       ? normalizePollInterval(params.defaultPollIntervalSec)
       : current.defaultPollIntervalSec;
-  const agentProvider =
-    params.defaultAgentProvider !== undefined
-      ? normalizeRequiredAgent(params.defaultAgentProvider)
-      : current.defaultAgentProvider;
   const promptTemplate =
     params.defaultPromptTemplate !== undefined
       ? normalizeRequiredText(params.defaultPromptTemplate, "promptTemplate")
@@ -407,12 +380,11 @@ export function updatePrTrackerSettings(
     UPDATE pr_tracker_settings
     SET
       default_poll_interval_sec = ?,
-      default_agent_provider = ?,
       default_prompt_template = ?,
       default_github_token = ?,
       updated_at = ?
     WHERE id = 1
-  `).run(pollInterval, agentProvider, promptTemplate, githubToken, now);
+  `).run(pollInterval, promptTemplate, githubToken, now);
 
   return getPrTrackerSettings();
 }
@@ -428,80 +400,10 @@ function normalizePollInterval(value: number): number {
   return Math.floor(value);
 }
 
-function normalizeOptionalAgent(value: string | null | undefined): string | null {
-  if (value === null || value === undefined) return null;
-  const trimmed = value.trim().toLowerCase();
-  if (trimmed.length === 0) return null;
-  if (!isAgentProviderId(trimmed)) {
-    throw new Error(
-      `Unsupported agent "${value}". Expected one of: ${AGENT_PROVIDERS.join(", ")}`
-    );
-  }
-  return trimmed;
-}
-
-function normalizeRequiredAgent(value: string): string {
-  const out = normalizeOptionalAgent(value);
-  if (!out) throw new Error("agentProvider is required");
-  return out;
-}
-
 function normalizeRequiredText(value: string, field: string): string {
   const trimmed = value.trim();
   if (!trimmed) throw new Error(`${field} cannot be empty`);
   return trimmed;
-}
-
-function resolveConfigChannelId(channelId: string): string {
-  const trimmed = channelId.trim();
-  if (!trimmed) return trimmed;
-  const delimiter = "::";
-  const index = trimmed.lastIndexOf(delimiter);
-  if (index < 0) return trimmed;
-  const raw = trimmed.slice(index + delimiter.length).trim();
-  return raw || trimmed;
-}
-
-type ChannelSnapshot = {
-  platform: PrTrackerPlatform;
-  workspaceId: string;
-  workspaceName: string;
-  channelId: string;
-  channelName: string;
-  workingDirectory: string;
-};
-
-function getChannelSnapshot(channelId: string): ChannelSnapshot {
-  const resolved = resolveConfigChannelId(channelId);
-  const config = loadOdeConfig();
-  for (const workspace of config.workspaces) {
-    const channel = workspace.channelDetails.find((item) => item.id === resolved);
-    if (!channel) continue;
-    return {
-      platform: workspace.type,
-      workspaceId: workspace.id,
-      workspaceName: workspace.name || workspace.id,
-      channelId: channel.id,
-      channelName: channel.name || channel.id,
-      workingDirectory: channel.workingDirectory?.trim() || "",
-    };
-  }
-  throw new Error(`Channel ${channelId} not found in configured workspaces`);
-}
-
-function getChannelSnapshotForTarget(channelId: string): {
-  platform: PrTrackerPlatform;
-  workspaceId: string;
-  channelId: string;
-  channelName: string;
-} {
-  const snap = getChannelSnapshot(channelId);
-  return {
-    platform: snap.platform,
-    workspaceId: snap.workspaceId,
-    channelId: snap.channelId,
-    channelName: snap.channelName,
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -713,11 +615,9 @@ export function listDuePrTrackers(nowMs: number = Date.now()): PrTrackerRecord[]
 
 export type UpdatePrTrackerParams = Partial<{
   enabled: boolean;
-  agentProvider: string | null;
   promptTemplate: string | null;
   pollIntervalSec: number | null;
   githubToken: string | null;
-  targetChannelId: string | null;
 }>;
 
 export function updatePrTracker(id: string, params: UpdatePrTrackerParams): PrTrackerRecord {
@@ -731,11 +631,6 @@ export function updatePrTracker(id: string, params: UpdatePrTrackerParams): PrTr
   const now = Date.now();
 
   const enabled = params.enabled !== undefined ? (params.enabled ? 1 : 0) : existing.enabled ? 1 : 0;
-
-  const agentProvider =
-    params.agentProvider !== undefined
-      ? normalizeOptionalAgent(params.agentProvider)
-      : existing.agentProvider;
 
   const promptTemplate =
     params.promptTemplate !== undefined
@@ -758,31 +653,6 @@ export function updatePrTracker(id: string, params: UpdatePrTrackerParams): PrTr
         : params.githubToken.trim()
       : existing.githubToken;
 
-  let targetWorkspaceId = existing.targetWorkspaceId;
-  let targetChannelId = existing.targetChannelId;
-  let targetChannelName = existing.targetChannelName;
-  let targetPlatform = existing.targetPlatform;
-
-  if (params.targetChannelId !== undefined) {
-    if (params.targetChannelId === null || params.targetChannelId.trim() === "") {
-      targetWorkspaceId = null;
-      targetChannelId = null;
-      targetChannelName = null;
-      targetPlatform = null;
-    } else {
-      const snap = getChannelSnapshotForTarget(params.targetChannelId);
-      targetWorkspaceId = snap.workspaceId;
-      targetChannelId = snap.channelId;
-      targetChannelName = snap.channelName;
-      targetPlatform = snap.platform;
-    }
-  }
-
-  // Enforce: enabling requires a target channel.
-  if (enabled === 1 && !targetChannelId) {
-    throw new Error("Cannot enable a tracker without a target channel");
-  }
-
   // First-enable bookkeeping: when transitioning from disabled→enabled and
   // there's no prior poll cursor, set last_polled_at to "now" so we don't
   // backfill historical events. Re-enabling later keeps the existing cursor.
@@ -795,27 +665,17 @@ export function updatePrTracker(id: string, params: UpdatePrTrackerParams): PrTr
     UPDATE pr_trackers
     SET
       enabled = ?,
-      agent_provider = ?,
       prompt_template = ?,
       poll_interval_sec = ?,
       github_token = ?,
-      target_workspace_id = ?,
-      target_channel_id = ?,
-      target_channel_name = ?,
-      target_platform = ?,
       last_polled_at = ?,
       updated_at = ?
     WHERE id = ?
   `).run(
     enabled,
-    agentProvider,
     promptTemplate,
     pollIntervalSec,
     githubToken,
-    targetWorkspaceId,
-    targetChannelId,
-    targetChannelName,
-    targetPlatform,
     nextLastPolledAt,
     now,
     id

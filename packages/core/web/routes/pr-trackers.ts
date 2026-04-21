@@ -11,7 +11,6 @@ import {
   type UpdatePrTrackerParams,
   type UpdatePrTrackerSettingsParams,
 } from "@/config/local/pr-trackers";
-import { listTaskChannelOptions } from "@/config/local/tasks";
 import { triggerPrTrackerNow } from "@/core/pr-tracker/scheduler";
 import { log } from "@/utils";
 import { jsonResponse, readJsonBody, runRoute } from "../http";
@@ -77,10 +76,6 @@ function parseTrackerUpdate(payload: Record<string, unknown>): UpdatePrTrackerPa
   const update: UpdatePrTrackerParams = {};
   const enabled = getBoolean(payload, "enabled");
   if (enabled !== undefined) update.enabled = enabled;
-  if ("agentProvider" in payload) {
-    const raw = getOptionalString(payload, "agentProvider");
-    update.agentProvider = raw === undefined ? null : raw;
-  }
   if ("promptTemplate" in payload) {
     const raw = getOptionalString(payload, "promptTemplate");
     update.promptTemplate = raw === undefined ? null : raw;
@@ -93,10 +88,6 @@ function parseTrackerUpdate(payload: Record<string, unknown>): UpdatePrTrackerPa
     const raw = getOptionalString(payload, "githubToken");
     update.githubToken = raw === undefined ? null : raw;
   }
-  if ("targetChannelId" in payload) {
-    const raw = getOptionalString(payload, "targetChannelId");
-    update.targetChannelId = raw === undefined ? null : raw;
-  }
   return update;
 }
 
@@ -106,8 +97,6 @@ function parseSettingsUpdate(
   const update: UpdatePrTrackerSettingsParams = {};
   const interval = getNumber(payload, "defaultPollIntervalSec");
   if (interval !== undefined) update.defaultPollIntervalSec = interval;
-  const agent = getOptionalString(payload, "defaultAgentProvider");
-  if (agent !== undefined) update.defaultAgentProvider = agent ?? "";
   const prompt = getOptionalString(payload, "defaultPromptTemplate");
   if (prompt !== undefined) update.defaultPromptTemplate = prompt ?? "";
   const token = getOptionalString(payload, "defaultGithubToken");
@@ -118,7 +107,6 @@ function parseSettingsUpdate(
 function buildListPayload() {
   return {
     trackers: listPrTrackers(),
-    channels: listTaskChannelOptions(),
     settings: getPrTrackerSettings(),
   };
 }
@@ -142,7 +130,6 @@ export function registerPrTrackerRoutes(app: Elysia): void {
         return {
           tracker,
           events: listPrTrackerEvents(id, 100),
-          channels: listTaskChannelOptions(),
           settings: getPrTrackerSettings(),
         };
       },
@@ -185,7 +172,6 @@ export function registerPrTrackerRoutes(app: Elysia): void {
         resolveStatus: (message) => {
           if (message === "Missing tracker id") return 400;
           if (message === "PR tracker not found") return 404;
-          if (message.includes("target channel")) return 400;
           if (message.includes("missing")) return 409;
           return 400;
         },
