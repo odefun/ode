@@ -360,6 +360,7 @@ export async function sendMessage(
         error: err,
         rateLimited,
         processorId,
+        threadId,
       });
       deliveryStats.logThrottledWarn(
         `slack-send:${rawChannelId}`,

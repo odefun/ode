@@ -178,10 +178,18 @@ function captureDeliveryFailure(failure: FailureRecord): void {
       if (failure.processorId) {
         scope.setTag("processor_id", failure.processorId);
       }
+      if (failure.threadId) {
+        // Tag the thread id so issues triggered by a malformed / synthetic
+        // thread (e.g. `invalid_thread_ts` when the caller hands Slack a
+        // non-`ts` string like `task:<uuid>`) are diagnosable from Sentry
+        // alone, without having to correlate with local logs.
+        scope.setTag("thread_id", failure.threadId);
+      }
       scope.setContext("delivery", {
         platform: failure.platform,
         op: failure.op,
         channelId: failure.channelId,
+        threadId: failure.threadId,
         processorId: failure.processorId,
         messageTs: failure.messageTs,
         rateLimited: failure.rateLimited,

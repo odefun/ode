@@ -110,6 +110,24 @@ describe("DeliveryStats", () => {
     expect(failure.error).toBe("boom");
   });
 
+  test("failure record includes threadId when provided", () => {
+    const stats = new DeliveryStats();
+    const received: unknown[] = [];
+    stats.setFailureHook((failure) => {
+      received.push(failure);
+    });
+    stats.recordFailure({
+      platform: "slack",
+      channelId: "C1",
+      op: "send",
+      error: new Error("invalid_thread_ts"),
+      threadId: "task:abc-123",
+    });
+    expect(received).toHaveLength(1);
+    const failure = received[0] as { threadId?: string };
+    expect(failure.threadId).toBe("task:abc-123");
+  });
+
   test("failure hook errors do not break recording", () => {
     const stats = new DeliveryStats();
     stats.setFailureHook(() => {
