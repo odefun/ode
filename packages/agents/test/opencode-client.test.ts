@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
   extractInfoError,
   formatInfoError,
+  isAbortError,
   isOversizedImageError,
 } from "../opencode/client";
 
@@ -69,5 +70,14 @@ describe("opencode info-error detection", () => {
         data: { message: "image dimensions exceed 2000 pixels" },
       })
     ).toBe(false);
+  });
+
+  it("flags MessageAbortedError as a non-fatal abort", () => {
+    expect(isAbortError({ name: "MessageAbortedError", data: {} })).toBe(true);
+  });
+
+  it("does not flag provider failures as aborts", () => {
+    expect(isAbortError({ name: "APIError", data: { message: "boom" } })).toBe(false);
+    expect(isAbortError({ name: "ProviderAuthError", data: {} })).toBe(false);
   });
 });

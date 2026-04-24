@@ -78,6 +78,18 @@ export function formatInfoError(error: OpenCodeInfoError): string {
 }
 
 /**
+ * `MessageAbortedError` is produced by the OpenCode server when a run is
+ * cancelled (e.g. the user typed `stop` and the kernel called
+ * `session.abort`). It is a normal, non-fatal outcome: the kernel's stop
+ * path at packages/core/kernel/request-run.ts is responsible for publishing
+ * the final text. Treat it as a soft failure so we don't race ahead of the
+ * stop handling with a failed-run status.
+ */
+export function isAbortError(error: OpenCodeInfoError): boolean {
+  return error.name === "MessageAbortedError";
+}
+
+/**
  * Detect the Anthropic "image dimensions exceed max allowed size" error. A
  * single oversized screenshot stuck in session history would otherwise break
  * every subsequent turn in the thread, because the full history is replayed
@@ -288,16 +300,21 @@ export async function sendMessage(
       // the user.
       const data = result.data as Record<string, unknown>;
       const infoError = extractInfoError(data);
-      if (infoError) {
+      if (infoError && !isAbortError(infoError)) {
         // If the error was caused by an oversized image in the session
         // history, try to revert the poisoned turn so subsequent messages
-        // in this thread are not permanently broken. We fire-and-forget:
-        // revert failures should not mask the original error.
+        // in this thread are not permanently broken. Fire-and-forget: we
+        // do NOT await here, so a slow/hung revert cannot delay the user
+        // from seeing the original API failure.
         if (isOversizedImageError(infoError)) {
-          await tryRevertOversizedImageTurn(client, activeSessionId, data, workingPath);
+          void tryRevertOversizedImageTurn(client, activeSessionId, data, workingPath);
         }
         throw new Error(formatInfoError(infoError));
       }
+      // MessageAbortedError falls through: the assistant message is empty
+      // because the user stopped the run. The kernel's stop path handles
+      // this gracefully, so surfacing it as a thrown error here would just
+      // race the stop handler and flip the run into a "failed" state.
 
       // Extract text from response in a few known shapes.
       const messages: OpenCodeMessage[] = [];
