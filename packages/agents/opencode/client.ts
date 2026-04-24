@@ -43,6 +43,98 @@ export function buildOpenCodeCommand(
   return formatShellCommand(args);
 }
 
+/**
+ * Shape of the OpenCode assistant-message `error` field. Matches the SDK's
+ * `ApiError | ProviderAuthError | UnknownError | MessageOutputLengthError |
+ * MessageAbortedError` union (see @opencode-ai/sdk types).
+ */
+type OpenCodeInfoError = {
+  name?: string;
+  data?: {
+    message?: string;
+    statusCode?: number;
+    providerID?: string;
+    responseBody?: string;
+    [key: string]: unknown;
+  };
+};
+
+export function extractInfoError(data: Record<string, unknown>): OpenCodeInfoError | null {
+  const info = data.info as Record<string, unknown> | undefined;
+  const error = info?.error;
+  if (!error || typeof error !== "object") return null;
+  return error as OpenCodeInfoError;
+}
+
+export function formatInfoError(error: OpenCodeInfoError): string {
+  const name = error.name ?? "UnknownError";
+  const message = error.data?.message;
+  const statusCode = error.data?.statusCode;
+  const statusSuffix = statusCode ? ` (status ${statusCode})` : "";
+  if (message) {
+    return `OpenCode ${name}${statusSuffix}: ${message}`;
+  }
+  return `OpenCode ${name}${statusSuffix}`;
+}
+
+/**
+ * Detect the Anthropic "image dimensions exceed max allowed size" error. A
+ * single oversized screenshot stuck in session history would otherwise break
+ * every subsequent turn in the thread, because the full history is replayed
+ * on every prompt. See thread `C0AUUDD0VDX:1776966674.077239` for the
+ * original report.
+ */
+export function isOversizedImageError(error: OpenCodeInfoError): boolean {
+  if (error.name !== "APIError") return false;
+  const haystacks: string[] = [];
+  if (typeof error.data?.message === "string") haystacks.push(error.data.message);
+  if (typeof error.data?.responseBody === "string") haystacks.push(error.data.responseBody);
+  const blob = haystacks.join(" ").toLowerCase();
+  if (!blob) return false;
+  return (
+    blob.includes("image dimensions exceed") ||
+    blob.includes("2000 pixels") ||
+    blob.includes("many-image requests")
+  );
+}
+
+async function tryRevertOversizedImageTurn(
+  client: Awaited<ReturnType<typeof getSessionClient>>,
+  sessionId: string,
+  data: Record<string, unknown>,
+  directory: string
+): Promise<void> {
+  try {
+    const info = data.info as { id?: string; parentID?: string } | undefined;
+    // Prefer reverting to the parent user message so the failed assistant
+    // turn plus its oversized-image tool output are removed; fall back to
+    // the assistant message id if parent is missing.
+    const messageID = info?.parentID ?? info?.id;
+    if (!messageID) {
+      log.warn("Oversized-image error detected but could not locate message id to revert", {
+        sessionId,
+      });
+      return;
+    }
+    log.warn("Reverting session turn that triggered oversized-image APIError", {
+      sessionId,
+      messageID,
+    });
+    await client.session.revert({
+      sessionID: sessionId,
+      messageID,
+      directory: directory || undefined,
+    });
+  } catch (err) {
+    // Revert is best-effort: if it fails we still want the original API
+    // error to surface to the user rather than swallowing it here.
+    log.warn("Failed to revert session after oversized-image APIError", {
+      sessionId,
+      error: String(err),
+    });
+  }
+}
+
 export async function createSession(
   workingPath: string,
   env?: SessionEnvironment
@@ -188,9 +280,27 @@ export async function sendMessage(
         throw new Error("OpenCode returned empty response");
       }
 
+      // The SDK returns 200 OK even when the underlying provider call failed:
+      // the failure is stashed on `data.info.error` (ApiError, ProviderAuthError, ...)
+      // and the assistant message ends up with zero text parts. Without this check
+      // the kernel would silently fall back to "_Done_" (see
+      // packages/core/kernel/request-run.ts:847) and hide the real failure from
+      // the user.
+      const data = result.data as Record<string, unknown>;
+      const infoError = extractInfoError(data);
+      if (infoError) {
+        // If the error was caused by an oversized image in the session
+        // history, try to revert the poisoned turn so subsequent messages
+        // in this thread are not permanently broken. We fire-and-forget:
+        // revert failures should not mask the original error.
+        if (isOversizedImageError(infoError)) {
+          await tryRevertOversizedImageTurn(client, activeSessionId, data, workingPath);
+        }
+        throw new Error(formatInfoError(infoError));
+      }
+
       // Extract text from response in a few known shapes.
       const messages: OpenCodeMessage[] = [];
-      const data = result.data as Record<string, unknown>;
 
       const pushText = (value: unknown): void => {
         if (typeof value !== "string") return;
