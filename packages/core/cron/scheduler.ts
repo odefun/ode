@@ -429,13 +429,34 @@ async function tickCronJobs(): Promise<void> {
     0
   ).getTime();
 
-  const jobs = listEnabledCronJobs();
+  // The poll loop runs every CRON_POLL_INTERVAL_MS; transient SQLite I/O
+  // failures (e.g. a flaky disk, fs sync, or inbox.db checkpoint contention)
+  // used to surface as unhandled promise rejections to Sentry because the
+  // synchronous throw from `listEnabledCronJobs` / `markCronJobTriggered`
+  // had no catcher in the async entrypoint. Swallowing the error here is
+  // the right behaviour: the scheduler is best-effort and retries next tick.
+  let jobs: ReturnType<typeof listEnabledCronJobs>;
+  try {
+    jobs = listEnabledCronJobs();
+  } catch (error) {
+    log.warn("Cron scheduler tick failed to read enabled jobs", {
+      error: String(error),
+    });
+    return;
+  }
   for (const job of jobs) {
     if (runningJobIds.has(job.id)) continue;
     try {
       if (!matchesCronExpression(job.cronExpression, now)) continue;
     } catch (error) {
-      markCronJobFailed(job.id, error instanceof Error ? error.message : String(error));
+      try {
+        markCronJobFailed(job.id, error instanceof Error ? error.message : String(error));
+      } catch (markError) {
+        log.warn("Failed to mark cron job with invalid expression as failed", {
+          cronJobId: job.id,
+          error: String(markError),
+        });
+      }
       log.warn("Skipping cron job with invalid cron expression", {
         cronJobId: job.id,
         cronExpression: job.cronExpression,
@@ -444,7 +465,16 @@ async function tickCronJobs(): Promise<void> {
       continue;
     }
 
-    const claimed = markCronJobTriggered(job.id, minuteStartMs);
+    let claimed = false;
+    try {
+      claimed = markCronJobTriggered(job.id, minuteStartMs);
+    } catch (error) {
+      log.warn("Failed to claim cron job for execution", {
+        cronJobId: job.id,
+        error: String(error),
+      });
+      continue;
+    }
     if (!claimed) continue;
 
     runningJobIds.add(job.id);

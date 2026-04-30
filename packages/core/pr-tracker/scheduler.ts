@@ -530,7 +530,20 @@ function earliestEventTimestamp(summaries: PrSummary[]): number {
 }
 
 async function tick(): Promise<void> {
-  const due = listDuePrTrackers();
+  // Transient SQLite I/O failures during the tick (reading
+  // `pr_tracker_settings` / `pr_trackers`) used to surface as unhandled
+  // promise rejections in Sentry because the synchronous throw from
+  // `listDuePrTrackers` had no catcher inside this async entrypoint.
+  // Swallow the error and retry on the next interval.
+  let due: ReturnType<typeof listDuePrTrackers>;
+  try {
+    due = listDuePrTrackers();
+  } catch (error) {
+    log.warn("PR tracker scheduler tick failed to read due trackers", {
+      error: String(error),
+    });
+    return;
+  }
   for (const tracker of due) {
     if (runningTrackerIds.has(tracker.id)) continue;
     runningTrackerIds.add(tracker.id);

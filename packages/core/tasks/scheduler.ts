@@ -490,15 +490,47 @@ async function runTask(task: TaskRecord): Promise<void> {
 }
 
 async function tickTasks(): Promise<void> {
-  const now = Date.now();
-  const due = listDueTasks(now);
+  // The poll loop runs every TASK_POLL_INTERVAL_MS; transient SQLite I/O
+  // failures (e.g. a flaky disk, fs sync, or an inbox.db checkpoint
+  // contending with another writer) used to surface as unhandled promise
+  // rejections to Sentry because the synchronous throw from
+  // `listDueTasks` / `markTaskTriggered` had no catcher in the async
+  // entrypoint. Swallowing the error here is the right behaviour: the
+  // scheduler is best-effort and will retry on the next tick.
+  let due: ReturnType<typeof listDueTasks>;
+  try {
+    const now = Date.now();
+    due = listDueTasks(now);
+  } catch (error) {
+    log.warn("Task scheduler tick failed to read due tasks", {
+      error: String(error),
+    });
+    return;
+  }
   for (const task of due) {
     if (runningTaskIds.has(task.id)) continue;
-    if (!markTaskTriggered(task.id)) continue;
+    try {
+      if (!markTaskTriggered(task.id)) continue;
+    } catch (error) {
+      log.warn("Failed to claim task for execution", {
+        taskId: task.id,
+        error: String(error),
+      });
+      continue;
+    }
     runningTaskIds.add(task.id);
     // Re-read after the atomic claim so `triggeredAt` is populated for the
     // inbox message id.
-    const claimed = getTaskById(task.id) ?? task;
+    let claimed: typeof task;
+    try {
+      claimed = getTaskById(task.id) ?? task;
+    } catch (error) {
+      log.warn("Failed to re-read claimed task", {
+        taskId: task.id,
+        error: String(error),
+      });
+      claimed = task;
+    }
     void runTask(claimed).finally(() => {
       runningTaskIds.delete(task.id);
     });
