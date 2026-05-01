@@ -49,6 +49,14 @@ export type FailureRecord = {
   platform: DeliveryPlatform;
   processorId?: string;
   channelId: string;
+  /**
+   * The thread identifier the adapter tried to post into, if the op was a
+   * threaded send. Useful for diagnosing `invalid_thread_ts` / routing bugs
+   * where the caller hands the adapter a synthetic or malformed thread id.
+   * Only set when the op actually targets a thread; top-level channel sends
+   * and update/delete ops leave this undefined.
+   */
+  threadId?: string;
   op: DeliveryOp;
   error: string;
   rateLimited: boolean;
@@ -142,6 +150,7 @@ export class DeliveryStats {
     rateLimited?: boolean;
     processorId?: string;
     messageTs?: string;
+    threadId?: string;
   }): void {
     const channel = this.ensureChannel(params.platform, params.channelId, params.processorId);
     const errorText = stringifyError(params.error);
@@ -159,6 +168,7 @@ export class DeliveryStats {
       platform: params.platform,
       processorId: params.processorId,
       channelId: params.channelId,
+      threadId: params.threadId,
       op: params.op,
       error: errorText,
       rateLimited: Boolean(params.rateLimited),
