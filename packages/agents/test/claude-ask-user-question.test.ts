@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { extractAskUserQuestionToolUse } from "../claude/client";
+import { extractAskUserQuestionToolUse, replyToQuestion } from "../claude/client";
 import { createAgentAdapter } from "../adapter";
 
 const ASSISTANT_WITH_ASK = JSON.stringify({
@@ -200,5 +200,17 @@ describe("createAgentAdapter().normalizeQuestions for Claude shape", () => {
     ]);
     expect(normalized.length).toBe(1);
     expect(normalized[0]?.question).toBe("ok?");
+  });
+});
+
+describe("Claude replyToQuestion guards", () => {
+  it("rejects when no AskUserQuestion is pending for the session", async () => {
+    await expect(
+      replyToQuestion({
+        sessionId: "session-with-no-pending-question",
+        requestId: "toolu_does_not_exist",
+        answers: [["whatever"]],
+      })
+    ).rejects.toThrow(/No pending Claude question/);
   });
 });

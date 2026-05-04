@@ -179,19 +179,35 @@ function getRecordSessionId(record: ClaudeJsonRecord, fallbackSessionId: string)
   return typeof record.session_id === "string" ? record.session_id : fallbackSessionId;
 }
 
+/**
+ * Publish a Claude stream-json record as a session event.
+ *
+ * `subscriptionSessionId` is the session id the kernel subscribed against
+ * when the request started. We *always* dispatch on that id even when the
+ * record itself carries a different `session_id` (Claude can rotate the id
+ * mid-turn on `--resume`), because in-process subscribers register by id
+ * and would otherwise stop receiving events the moment the id changes.
+ *
+ * `recordSessionFallback` is only used to compute the `session_id` we tag
+ * onto the published event payload (which downstream code reads to filter
+ * inspector state by session). Keeping that distinct from the dispatch key
+ * means we don't lose events even if the record drifts.
+ */
 function publishClaudeRecordAsSessionEvents(
   record: ClaudeJsonRecord,
-  fallbackSessionId: string
+  subscriptionSessionId: string,
+  recordSessionFallback: string = subscriptionSessionId
 ): void {
-  const sessionId = getRecordSessionId(record, fallbackSessionId);
+  const recordSessionId = getRecordSessionId(record, recordSessionFallback);
   const rawType = typeof record.type === "string" && record.type.trim()
     ? record.type.trim()
     : "unknown";
-  runtime.publishSessionEvent(sessionId, {
+  runtime.publishSessionEvent(subscriptionSessionId, {
     type: `claude.raw.${rawType}`,
     properties: {
       record,
       recordType: rawType,
+      recordSessionId,
       streamEventType: typeof record.event?.type === "string" ? record.event.type : undefined,
     },
   });
@@ -457,6 +473,20 @@ export async function sendMessage(
   const sessionKey = `${channelId}:${sessionId}`;
   const entry = runtime.beginRequest(sessionKey);
 
+  // The kernel subscribed against this `sessionId` when it built the
+  // request, and `subscribeToSession` registers handlers per-id in an
+  // in-memory map. If Claude rotates `session_id` mid-turn (it can on
+  // `--resume`), publishing on the rotated id would leave the kernel
+  // listening on a now-empty channel — including the question.asked event
+  // that drives the Slack question UI. We always dispatch on the original
+  // id and treat any rotated id as something we only need to honor when
+  // *spawning* the next Claude CLI invocation.
+  //
+  // adapter.ts also keys provider ownership off this original id, so all
+  // routing (subscribe → kernel filter → replyToQuestion) stays consistent
+  // even when the underlying Claude session id drifts.
+  const subscriptionSessionId = sessionId;
+
   try {
     return await runtime.withSessionLock(sessionKey, async () => {
       const agent = options?.agent;
@@ -467,16 +497,19 @@ export async function sendMessage(
       const systemPrompt = buildSystemPrompt(context?.slack);
 
       let isNewSession = newSessions.has(sessionId);
-      let currentSessionId = sessionId;
+      // Id used for Claude CLI --session-id / --resume + per-id environment
+      // overrides. Tracks the latest session id Claude reported so resume
+      // works after a rotation, while events stay on `subscriptionSessionId`.
+      let runtimeSessionId = sessionId;
       let prompt = initialPrompt;
 
       if (isNewSession) {
         const fallbackTitle = deriveSessionTitleFromPrompt(message);
         if (fallbackTitle) {
-          runtime.publishSessionEvent(sessionId, {
+          runtime.publishSessionEvent(subscriptionSessionId, {
             type: "session.updated",
             properties: {
-              sessionID: sessionId,
+              sessionID: subscriptionSessionId,
               info: {
                 title: fallbackTitle,
               },
@@ -487,14 +520,14 @@ export async function sendMessage(
 
       for (let round = 0; round < MAX_ASK_USER_QUESTION_ROUNDS; round += 1) {
         const args = buildClaudeCommandArgs({
-          sessionId: currentSessionId,
+          sessionId: runtimeSessionId,
           isNewSession,
           systemPrompt,
           workingPath,
           prompt,
         });
 
-        const envOverrides = runtime.getSessionEnvironment(currentSessionId);
+        const envOverrides = runtime.getSessionEnvironment(runtimeSessionId);
         const { output, permissionMode, command } = await runClaudeWithFallback(
           args,
           workingPath,
@@ -502,12 +535,13 @@ export async function sendMessage(
           entry,
           forcedPermissionMode,
           (record) => {
-            publishClaudeRecordAsSessionEvents(record, currentSessionId);
+            publishClaudeRecordAsSessionEvents(record, subscriptionSessionId, runtimeSessionId);
           }
         );
 
         log.info("Claude CLI response received", {
-          sessionId: currentSessionId,
+          subscriptionSessionId,
+          runtimeSessionId,
           permissionMode,
           command,
           round,
@@ -522,10 +556,10 @@ export async function sendMessage(
         }
 
         const responseSessionId = parsed?.session_id;
-        if (responseSessionId && responseSessionId !== currentSessionId && context?.slack?.threadId) {
+        if (responseSessionId && responseSessionId !== runtimeSessionId && context?.slack?.threadId) {
           runtime.setSessionEnvironment(responseSessionId, envOverrides);
           setThreadSessionId(channelId, context.slack.threadId, responseSessionId);
-          currentSessionId = responseSessionId;
+          runtimeSessionId = responseSessionId;
         }
 
         if (parsed?.is_error) {
@@ -535,7 +569,7 @@ export async function sendMessage(
         const text = parsed?.result?.trim() ?? "";
         if (text) {
           newSessions.delete(sessionId);
-          newSessions.delete(currentSessionId);
+          newSessions.delete(runtimeSessionId);
           return [{ text, messageType: "assistant" }];
         }
 
@@ -560,17 +594,22 @@ export async function sendMessage(
         const deferred = createDeferred<
           { status: "answered"; answers: string[] } | { status: "cancelled"; reason?: string }
         >();
-        pendingQuestions.set(currentSessionId, {
+        // Key the pending entry by `subscriptionSessionId` so
+        // `replyToQuestion(sessionId, ...)` from the adapter (which uses the
+        // same original id) finds it even after `runtimeSessionId` rotated.
+        pendingQuestions.set(subscriptionSessionId, {
           requestId,
           questionCount: askUser.questions.length,
           deferred,
         });
 
-        runtime.publishSessionEvent(currentSessionId, {
+        runtime.publishSessionEvent(subscriptionSessionId, {
           type: "question.asked",
           properties: {
             id: requestId,
-            sessionID: currentSessionId,
+            // Use the kernel-known id so `extractEventSessionId` matches
+            // `request.sessionId` and the kernel doesn't filter the event.
+            sessionID: subscriptionSessionId,
             questions: askUser.questions,
           },
         });
@@ -579,9 +618,9 @@ export async function sendMessage(
         try {
           outcome = await deferred.promise;
         } finally {
-          const stored = pendingQuestions.get(currentSessionId);
+          const stored = pendingQuestions.get(subscriptionSessionId);
           if (stored && stored.requestId === requestId) {
-            pendingQuestions.delete(currentSessionId);
+            pendingQuestions.delete(subscriptionSessionId);
           }
         }
 
