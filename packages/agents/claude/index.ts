@@ -8,5 +8,10 @@ export {
   subscribeToSession,
   startServer,
   stopServer,
+  replyToQuestion,
+  extractAskUserQuestionToolUse,
   type SessionEnvironment,
+  type ClaudeAskUserQuestion,
+  type ClaudeAskUserQuestionOption,
+  type ClaudeAskUserQuestionToolUse,
 } from "./client";

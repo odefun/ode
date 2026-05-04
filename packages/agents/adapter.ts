@@ -4,6 +4,7 @@ import type { QuestionInfo } from "@opencode-ai/sdk/v2";
 import { getAgentProviderLabel } from "@/shared/agent-provider";
 import { getAgentProvider, type AgentProviderId } from "./registry";
 import { getSessionClient } from "./opencode";
+import { replyToQuestion as replyToClaudeQuestion } from "./claude";
 import {
   buildStatusMessageByProvider,
 } from "@/utils/status";
@@ -96,6 +97,10 @@ export function createAgentAdapter(options: AgentAdapterOptions = {}): AgentAdap
     },
     async replyToQuestion({ requestId, sessionId, directory, answers }) {
       const providerId = getProviderForSession(sessionId);
+      if (providerId === "claudecode") {
+        await replyToClaudeQuestion({ sessionId, requestId, answers });
+        return;
+      }
       if (providerId !== "opencode") {
         throw new Error(`Question replies are not supported for agent: ${providerId}`);
       }
@@ -111,19 +116,32 @@ export function createAgentAdapter(options: AgentAdapterOptions = {}): AgentAdap
     },
     normalizeQuestions(questions: unknown): NormalizedQuestion[] {
       if (!Array.isArray(questions) || questions.length === 0) return [];
-      return (questions as QuestionInfo[])
+      return (questions as Array<QuestionInfo | Record<string, unknown>>)
         .map((question) => {
-          const prompt = typeof question.question === "string" ? question.question.trim() : "";
-          const options = Array.isArray(question.options)
-            ? question.options
-                .map((option) => (typeof option?.label === "string" ? option.label : ""))
-                .filter((label) => label.length > 0)
-            : undefined;
+          const record = question as Record<string, unknown>;
+          const promptRaw = typeof record.question === "string" ? record.question : "";
+          const prompt = promptRaw.trim();
+          const optionsRaw = Array.isArray(record.options) ? record.options : [];
+          const options = optionsRaw
+            .map((option): string => {
+              if (!option) return "";
+              if (typeof option === "string") return option;
+              if (typeof option === "object") {
+                const label = (option as Record<string, unknown>).label;
+                if (typeof label === "string") return label;
+              }
+              return "";
+            })
+            .filter((label): label is string => label.length > 0);
+          const multipleRaw = record.multiple ?? record.multiSelect;
+          const multiple = typeof multipleRaw === "boolean" ? multipleRaw : undefined;
+          const customRaw = record.custom;
+          const custom = typeof customRaw === "boolean" ? customRaw : undefined;
           return {
             question: prompt,
-            options: options && options.length > 0 ? options : undefined,
-            multiple: question.multiple,
-            custom: question.custom,
+            options: options.length > 0 ? options : undefined,
+            multiple,
+            custom,
           };
         })
         .filter((question) => question.question.length > 0);
