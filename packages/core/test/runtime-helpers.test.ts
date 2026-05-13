@@ -76,6 +76,29 @@ describe("runtime helpers", () => {
     expect(result.message).toBe("Request timed out");
   });
 
+  it("categorizes Anthropic upstream 5xx as upstream timeout", () => {
+    const result = categorizeRuntimeError(
+      new Error('API Error: 524 {"title":"Error 524: A timeout occurred","cloudflare_error":true}')
+    );
+    expect(result.message).toBe("Anthropic upstream timeout");
+    expect(result.suggestion).toContain("retried once");
+  });
+
+  it("categorizes origin_response_timeout as upstream timeout", () => {
+    const result = categorizeRuntimeError(
+      new Error('something happened with "error_name":"origin_response_timeout"')
+    );
+    expect(result.message).toBe("Anthropic upstream timeout");
+  });
+
+  it("categorizes 'Session ID already in use' as session busy", () => {
+    const result = categorizeRuntimeError(
+      new Error("Error: Session ID a1c4b262-cb3d-4281-b1c0-6b0128dda381 is already in use.")
+    );
+    expect(result.message).toBe("Session is busy");
+    expect(result.suggestion).toContain("Wait a moment");
+  });
+
   describe("hasSimpleOptions", () => {
     it("accepts 2-5 short options", () => {
       expect(hasSimpleOptions(["yes", "no"])).toBe(true);

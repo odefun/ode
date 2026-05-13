@@ -175,6 +175,42 @@ function resolveClaudePermissionMode(agent?: string): string | undefined {
   return undefined;
 }
 
+/**
+ * Detects transient failure modes where retrying the same Claude CLI
+ * invocation has a good chance of succeeding:
+ *
+ *   - Anthropic / proxy upstream 5xx ("API Error: 5xx", Cloudflare 524, etc.).
+ *     The `claude` CLI surfaces these in the stdout `result` text and exits 1
+ *     with empty stderr.
+ *   - "Session ID … is already in use" emitted on stderr when an earlier
+ *     subprocess for the same session hadn't fully released the session lock.
+ *
+ * Errors are matched by message text because that's all we have once
+ * runCliJsonCommand normalises everything into Error.message.
+ */
+export function isTransientClaudeError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  if (!message) return false;
+  const lower = message.toLowerCase();
+
+  // Anthropic / Cloudflare upstream 5xx-style transient errors.
+  if (/api error:\s*5\d\d/i.test(message)) return true;
+  if (lower.includes("origin_response_timeout")) return true;
+  if (lower.includes('"retryable":true')) return true;
+  if (lower.includes("cloudflare_error")) return true;
+
+  // claude CLI's "session in use" race when we replace an in-flight request.
+  if (lower.includes("session id") && lower.includes("already in use")) return true;
+
+  return false;
+}
+
+const TRANSIENT_RETRY_DELAY_MS = 3000;
+
+async function delay(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function getRecordSessionId(record: ClaudeJsonRecord, fallbackSessionId: string): string {
   return typeof record.session_id === "string" ? record.session_id : fallbackSessionId;
 }
@@ -518,26 +554,58 @@ export async function sendMessage(
         }
       }
 
-      for (let round = 0; round < MAX_ASK_USER_QUESTION_ROUNDS; round += 1) {
-        const args = buildClaudeCommandArgs({
-          sessionId: runtimeSessionId,
-          isNewSession,
-          systemPrompt,
-          workingPath,
-          prompt,
-        });
+      const envOverrides = runtime.getSessionEnvironment(runtimeSessionId);
 
-        const envOverrides = runtime.getSessionEnvironment(runtimeSessionId);
-        const { output, permissionMode, command } = await runClaudeWithFallback(
-          args,
-          workingPath,
-          envOverrides,
-          entry,
-          forcedPermissionMode,
-          (record) => {
-            publishClaudeRecordAsSessionEvents(record, subscriptionSessionId, runtimeSessionId);
-          }
-        );
+      for (let round = 0; round < MAX_ASK_USER_QUESTION_ROUNDS; round += 1) {
+        // One CLI turn, with a single transient-error retry. We retry the
+        // whole CLI invocation when the underlying failure looks like an
+        // Anthropic / proxy upstream 5xx (524 with origin_response_timeout,
+        // generic API Error: 5xx) or the "session id is already in use"
+        // race that fires when a previous subprocess hadn't released its
+        // session lock yet. See isTransientClaudeError for the exact set.
+        //
+        // The retry always switches to --resume even if the first attempt
+        // was a brand-new session: if the upstream accepted the session
+        // registration before timing out, reusing --session-id would itself
+        // hit "already in use" on the retry.
+        const runOnce = async (
+          attemptIsNewSession: boolean
+        ): Promise<{ output: string; permissionMode: string; command: string }> => {
+          const attemptArgs = buildClaudeCommandArgs({
+            sessionId: runtimeSessionId,
+            isNewSession: attemptIsNewSession,
+            systemPrompt,
+            workingPath,
+            prompt,
+          });
+          return await runClaudeWithFallback(
+            attemptArgs,
+            workingPath,
+            envOverrides,
+            entry,
+            forcedPermissionMode,
+            (record) => {
+              publishClaudeRecordAsSessionEvents(record, subscriptionSessionId, runtimeSessionId);
+            }
+          );
+        };
+
+        let output: string;
+        let permissionMode: string;
+        let command: string;
+        try {
+          ({ output, permissionMode, command } = await runOnce(isNewSession));
+        } catch (err) {
+          if (!isTransientClaudeError(err)) throw err;
+          log.warn("Retrying Claude CLI after transient error", {
+            sessionId: subscriptionSessionId,
+            runtimeSessionId,
+            error: err instanceof Error ? err.message : String(err),
+            retryDelayMs: TRANSIENT_RETRY_DELAY_MS,
+          });
+          await delay(TRANSIENT_RETRY_DELAY_MS);
+          ({ output, permissionMode, command } = await runOnce(false));
+        }
 
         log.info("Claude CLI response received", {
           subscriptionSessionId,
@@ -563,7 +631,10 @@ export async function sendMessage(
         }
 
         if (parsed?.is_error) {
-          throw new Error(parsed.error || "Claude returned an error");
+          // Surface the upstream error text so isTransientClaudeError (and
+          // categorizeRuntimeError downstream) can recognise 5xx / 524 even
+          // when claude reports the failure in-band via stream-json.
+          throw new Error(parsed.error || parsed.result || "Claude returned an error");
         }
 
         const text = parsed?.result?.trim() ?? "";

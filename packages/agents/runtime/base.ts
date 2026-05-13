@@ -8,6 +8,12 @@ type SessionHandler = (event: unknown) => void;
 type ActiveRequestEntry = {
   controller: AbortController;
   process?: ChildProcess;
+  /**
+   * If this entry replaced an in-flight request, the previous process is kept
+   * here so the next CLI invocation can wait for it to fully exit (and release
+   * any session-level lock) before spawning a replacement.
+   */
+  previousProcess?: ChildProcess;
 };
 
 type RunCliJsonCommandParams<TRecord> = {
@@ -24,6 +30,46 @@ type RunCliJsonCommandParams<TRecord> = {
   logRawOutput?: boolean;
 };
 
+/**
+ * How long to wait for a previously-spawned CLI subprocess to fully exit
+ * before spawning the next one for the same session. Several CLIs (notably
+ * `claude`) hold an in-flight session lock until the process actually exits,
+ * so spawning a replacement too eagerly produces "Session ID … is already in
+ * use".
+ */
+const PROCESS_CLOSE_TIMEOUT_MS = 2000;
+
+async function waitForPreviousProcessClose(
+  providerName: string,
+  entry: ActiveRequestEntry
+): Promise<void> {
+  const previous = entry.previousProcess;
+  if (!previous) return;
+  // Drop the reference unconditionally so we don't hold the previous process
+  // forever, even if it has already exited.
+  entry.previousProcess = undefined;
+  if (previous.exitCode !== null || previous.signalCode !== null) return;
+
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      log.warn(`${providerName} previous process did not close in time`, {
+        pid: previous.pid,
+        timeoutMs: PROCESS_CLOSE_TIMEOUT_MS,
+      });
+      finish();
+    }, PROCESS_CLOSE_TIMEOUT_MS);
+    previous.once("close", finish);
+    previous.once("exit", finish);
+  });
+}
+
 export async function runCliJsonCommand<TRecord>(params: RunCliJsonCommandParams<TRecord>): Promise<string> {
   const {
     providerName,
@@ -38,6 +84,12 @@ export async function runCliJsonCommand<TRecord>(params: RunCliJsonCommandParams
     onExit,
     logRawOutput = false,
   } = params;
+
+  // If a previous child process for the same session was just SIGTERM'd, give
+  // it a brief window to actually exit (and release any server-side session
+  // lock) before we spawn the next one. Bounded by PROCESS_CLOSE_TIMEOUT_MS,
+  // so a stuck child can never block us indefinitely.
+  await waitForPreviousProcessClose(providerName, entry);
 
   return new Promise((resolve, reject) => {
     const child = spawn(binary, args, {
@@ -249,7 +301,10 @@ export class CliAgentRuntime extends BaseAgentRuntime {
       existingEntry.process?.kill("SIGTERM");
     }
 
-    const entry: ActiveRequestEntry = { controller: new AbortController() };
+    const entry: ActiveRequestEntry = {
+      controller: new AbortController(),
+      previousProcess: existingEntry?.process,
+    };
     this.activeRequests.set(sessionKey, entry);
     return entry;
   }

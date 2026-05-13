@@ -26,6 +26,33 @@ export function categorizeRuntimeError(
 ): { message: string; suggestion: string } {
   const errorStr = err instanceof Error ? err.message : String(err);
 
+  // Check upstream / session errors BEFORE the generic "timeout" rule below,
+  // because 524 payloads also contain the word "timeout".
+
+  // Anthropic / proxy 5xx upstream timeouts. We retry once internally; if the
+  // retry also failed, surface a clearer message than "start a new thread".
+  if (
+    /API Error:\s*5\d\d/i.test(errorStr) ||
+    errorStr.includes("origin_response_timeout") ||
+    errorStr.includes("cloudflare_error") ||
+    (errorStr.includes("524") && errorStr.toLowerCase().includes("origin"))
+  ) {
+    return {
+      message: "Anthropic upstream timeout",
+      suggestion: "The model provider was slow to respond and we already retried once. Please try again in a minute.",
+    };
+  }
+
+  // Claude CLI's "Session ID … is already in use" race. We retry once
+  // internally as well; if it still failed the previous subprocess likely
+  // didn't release the lock in time.
+  if (/session id [^"]+ is already in use/i.test(errorStr)) {
+    return {
+      message: "Session is busy",
+      suggestion: "A previous request hasn't finished releasing this session. Wait a moment and try again.",
+    };
+  }
+
   if (errorStr.includes("timeout") || errorStr.includes("timed out") || errorStr.includes("ETIMEDOUT")) {
     return {
       message: "Request timed out",
