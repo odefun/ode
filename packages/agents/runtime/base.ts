@@ -70,6 +70,54 @@ async function waitForPreviousProcessClose(
   });
 }
 
+/**
+ * When a CLI exits non-zero but writes its real error to stdout (as the
+ * `claude` CLI does for upstream 5xx — `code=1`, stderr empty, the
+ * `API Error: 524 …` payload buried in the last stream-json `type:"result"`
+ * line), we still need to surface that text so downstream transient-error
+ * matching can recognise it. This pulls the most useful message out of the
+ * captured stdout in a provider-agnostic way.
+ */
+export function extractErrorFromStdout(stdout: string): string | undefined {
+  if (!stdout) return undefined;
+
+  const lines = stdout.split("\n");
+  // Scan from the end: the terminating record (e.g. `type:"result"`) is
+  // emitted last and carries the most reliable error payload.
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i]?.trim();
+    if (!line || !line.startsWith("{")) continue;
+    try {
+      const parsed = JSON.parse(line) as {
+        is_error?: boolean;
+        error?: unknown;
+        result?: unknown;
+      };
+      if (parsed.is_error === true || typeof parsed.error === "string") {
+        if (typeof parsed.error === "string" && parsed.error.trim().length > 0) {
+          return parsed.error.trim();
+        }
+        if (typeof parsed.result === "string" && parsed.result.trim().length > 0) {
+          return parsed.result.trim();
+        }
+        // Last resort: return the raw record so isTransientClaudeError can
+        // still pattern-match on its body (e.g. `cloudflare_error`).
+        return line;
+      }
+    } catch {
+      // Not a JSON line; keep scanning.
+    }
+  }
+
+  // No structured error found; fall back to the last non-empty line of stdout
+  // (avoids returning multi-MB blobs).
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i]?.trim();
+    if (line) return line.length > 500 ? `${line.slice(0, 500)}…` : line;
+  }
+  return undefined;
+}
+
 export async function runCliJsonCommand<TRecord>(params: RunCliJsonCommandParams<TRecord>): Promise<string> {
   const {
     providerName,
@@ -176,7 +224,18 @@ export async function runCliJsonCommand<TRecord>(params: RunCliJsonCommandParams
       log.info(`${providerName} CLI completed`, completionDetails);
 
       if (code !== 0) {
-        reject(new Error(stderr || `${providerName} CLI exited with code ${code}`));
+        // Prefer stderr (CLI's own diagnostics). If stderr is empty — which
+        // is the case for claude on Anthropic upstream 5xx — fall back to
+        // mining stdout for a structured error record so downstream code can
+        // recognise transient failures like API Error: 524 and retry.
+        const stdoutError = stderr ? undefined : extractErrorFromStdout(stdout);
+        reject(
+          new Error(
+            stderr ||
+              stdoutError ||
+              `${providerName} CLI exited with code ${code}`
+          )
+        );
         return;
       }
 
