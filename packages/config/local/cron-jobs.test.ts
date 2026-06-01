@@ -9,10 +9,12 @@ import {
   clearCronJobsForTests,
   closeCronJobDatabaseForTests,
   createCronJob,
+  disableCronJob,
   getCronJobById,
   markCronJobCompleted,
   markCronJobFailed,
   markCronJobRunning,
+  patchCronJob,
   reconcileInterruptedCronJobs,
 } from "./cron-jobs";
 
@@ -200,5 +202,79 @@ describe("reconcileInterruptedCronJobs", () => {
     expect(second).toHaveLength(0);
     // The row remains `failed` from the first pass.
     expect(getCronJobById(job.id)?.lastRunStatus).toBe("failed");
+  });
+});
+
+describe("disableCronJob", () => {
+  test("flips enabled to false and reports the transition", () => {
+    const job = createCronJob({
+      title: "to-disable",
+      cronExpression: "*/5 * * * *",
+      channelId: "C_TEST",
+      messageText: "hi",
+    });
+    expect(getCronJobById(job.id)?.enabled).toBe(true);
+
+    const changed = disableCronJob(job.id);
+    expect(changed).toBe(true);
+    expect(getCronJobById(job.id)?.enabled).toBe(false);
+  });
+
+  test("returns false when the row is already disabled (idempotent)", () => {
+    const job = createCronJob({
+      title: "already-off",
+      cronExpression: "*/5 * * * *",
+      channelId: "C_TEST",
+      messageText: "hi",
+      enabled: false,
+    });
+    const changed = disableCronJob(job.id);
+    expect(changed).toBe(false);
+    expect(getCronJobById(job.id)?.enabled).toBe(false);
+  });
+
+  test("returns false when the row does not exist", () => {
+    expect(disableCronJob("does-not-exist")).toBe(false);
+  });
+
+  test("succeeds even when the row's channel was removed from local config", () => {
+    // This is the scenario `disableCronJob` exists to solve:
+    // a cron job points at a channel that has since been removed from
+    // ode.json. `patchCronJob` would throw via `getChannelSnapshot`, but
+    // the direct-SQL `disableCronJob` must still flip `enabled` to false
+    // so the scheduler stops firing the row.
+    const job = createCronJob({
+      title: "stale-channel",
+      cronExpression: "*/5 * * * *",
+      channelId: "C_TEST",
+      messageText: "hi",
+    });
+
+    // Drop the channel from the on-disk config so getChannelSnapshot fails.
+    const emptyConfig = {
+      user: {},
+      workspaces: [
+        {
+          id: "ws-test",
+          name: "Test Workspace",
+          type: "slack",
+          channelDetails: [], // C_TEST is gone
+        },
+      ],
+    };
+    fs.writeFileSync(ODE_CONFIG_FILE, JSON.stringify(emptyConfig));
+    invalidateOdeConfigCache();
+
+    // Sanity check: patchCronJob blows up because it re-validates the
+    // channel before writing. This is exactly the bug Codex flagged on
+    // PR #211 and is the reason we route around it.
+    expect(() => patchCronJob(job.id, { enabled: false })).toThrow(
+      /Channel not found/i,
+    );
+    expect(getCronJobById(job.id)?.enabled).toBe(true);
+
+    // disableCronJob bypasses channel resolution entirely.
+    expect(disableCronJob(job.id)).toBe(true);
+    expect(getCronJobById(job.id)?.enabled).toBe(false);
   });
 });

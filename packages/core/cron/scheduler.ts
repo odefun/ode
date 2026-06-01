@@ -9,13 +9,13 @@ import {
 } from "@/config";
 import {
   type CronJobRecord,
+  disableCronJob,
   getCronJobById,
   listEnabledCronJobs,
   markCronJobCompleted,
   markCronJobFailed,
   markCronJobRunning,
   markCronJobTriggered,
-  patchCronJob,
   reconcileInterruptedCronJobs,
 } from "@/config/local/cron-jobs";
 import {
@@ -295,7 +295,7 @@ async function disableCronJobForPermanentChannelError(
     }
   }
   try {
-    patchCronJob(job.id, { enabled: false });
+    disableCronJob(job.id);
   } catch (disableError) {
     log.warn("Failed to disable cron job after permanent channel error", {
       cronJobId: job.id,
@@ -485,7 +485,7 @@ async function runCronJob(job: CronJobRecord, minuteStartMs: number): Promise<vo
       // while the channel is still healthy.
       if (isPermanentChannelError(notifyError)) {
         try {
-          patchCronJob(job.id, { enabled: false });
+          disableCronJob(job.id);
           markCronJobFailed(
             job.id,
             `auto-disabled: channel unreachable (${message})`,
