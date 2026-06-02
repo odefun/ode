@@ -39,6 +39,18 @@ describe("isPermanentChannelError", () => {
     ).toBe(true);
   });
 
+  test("matches the Discord resolveTextChannel wrapper when it carries a DiscordAPIError code", () => {
+    // resolveTextChannel() in packages/ims/discord/client.ts wraps the
+    // underlying DiscordAPIError in a generic Error("... is not text-based
+    // or inaccessible"). The wrapper forwards the original numeric `code`
+    // so this helper can still classify it as permanent.
+    const wrapper = Object.assign(
+      new Error("Discord channel 123 is not text-based or inaccessible"),
+      { code: 10003 },
+    );
+    expect(isPermanentChannelError(wrapper)).toBe(true);
+  });
+
   test("matches Lark chat_not_found", () => {
     expect(isPermanentChannelError(new Error("chat_not_found: chat does not exist"))).toBe(true);
   });

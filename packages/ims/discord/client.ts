@@ -117,6 +117,20 @@ async function maybeHandleLauncherCommand(params: {
 }
 async function resolveTextChannel(channelId: string, processorId?: string) {
   const attempts: string[] = [];
+  // Collect Discord API error codes across every fetch attempt so the
+  // caller can detect permanent-access failures (Unknown Channel / Missing
+  // Access / etc.) even though we re-throw a generic wrapper Error below.
+  // discord.js surfaces these on `err.code` as numbers; we forward them on
+  // the wrapper as `discordErrorCodes` and also expose the first as `code`
+  // so `isPermanentChannelError` can pick it up via the `code` shape.
+  const discordErrorCodes: number[] = [];
+  const captureCode = (error: unknown) => {
+    if (typeof error === "object" && error !== null) {
+      const code = (error as { code?: unknown }).code;
+      if (typeof code === "number") discordErrorCodes.push(code);
+    }
+  };
+
   if (processorId) {
     const pinnedClient = discordClientByProcessorId.get(processorId);
     if (pinnedClient) {
@@ -127,6 +141,7 @@ async function resolveTextChannel(channelId: string, processorId?: string) {
         }
         attempts.push(`bot=${pinnedClient.user?.id || "unknown"}: channel_not_text_or_missing`);
       } catch (error) {
+        captureCode(error);
         const errorMessage = error instanceof Error ? error.message : String(error);
         attempts.push(`bot=${pinnedClient.user?.id || "unknown"}: ${errorMessage}`);
       }
@@ -142,6 +157,7 @@ async function resolveTextChannel(channelId: string, processorId?: string) {
       }
       attempts.push(`bot=${client.user?.id || "unknown"}: channel_not_text_or_missing`);
     } catch (error) {
+      captureCode(error);
       const errorMessage = error instanceof Error ? error.message : String(error);
       attempts.push(`bot=${client.user?.id || "unknown"}: ${errorMessage}`);
     }
@@ -155,7 +171,20 @@ async function resolveTextChannel(channelId: string, processorId?: string) {
     });
   }
 
-  throw new Error(`Discord channel ${channelId} is not text-based or inaccessible`);
+  const wrapper = new Error(`Discord channel ${channelId} is not text-based or inaccessible`);
+  if (discordErrorCodes.length > 0) {
+    // Prefer the most informative code: prioritise "permanent" classes
+    // (10003 Unknown Channel, 50001 Missing Access, 50013 Missing Perms,
+    // 50007 Cannot DM) so isPermanentChannelError can disable the cron row
+    // even if some bots failed transiently.
+    const PERMANENT_PRIORITY = new Set([10003, 50001, 50013, 50007]);
+    const permanent = discordErrorCodes.find((c) => PERMANENT_PRIORITY.has(c));
+    (wrapper as Error & { code?: number; discordErrorCodes?: number[] }).code =
+      permanent ?? discordErrorCodes[0];
+    (wrapper as Error & { code?: number; discordErrorCodes?: number[] }).discordErrorCodes =
+      [...discordErrorCodes];
+  }
+  throw wrapper;
 }
 
 async function buildDiscordContext(
