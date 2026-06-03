@@ -2,6 +2,7 @@ import { basename } from "path";
 import { getApp, getSlackBotToken } from "./client";
 import { hasSimpleOptions } from "@/core/runtime/helpers";
 import type { StatusStreamChunk } from "@/core/types";
+import { isSyntheticOwner } from "@/ims/shared/synthetic-owner";
 
 // ---------------------------------------------------------------------------
 // Slack IM helper module.
@@ -90,11 +91,18 @@ export async function postSlackQuestion(args: {
   const displayPrefix = prefix ?? "";
   const questionText = `${displayPrefix}${question}`;
 
+  // Synthetic placeholder thread ids (`task:` / `cron-job:` / `cron:`) are
+  // not valid Slack `thread_ts` values; if the runtime hands us one during
+  // a task/cron run, fall back to posting at the top of the channel rather
+  // than letting Slack reject the call with `invalid_thread_ts`.
+  const threadIsSynthetic = isSyntheticOwner(threadId);
+  const threadField = threadIsSynthetic ? {} : { thread_ts: threadId };
+
   const postPlainText = async (): Promise<string | undefined> => {
     const optionText = options.length > 0 ? `\nOptions: ${options.join(" / ")}` : "";
     const result = await client.chat.postMessage({
       channel: channelId,
-      thread_ts: threadId,
+      ...threadField,
       text: `${questionText}${optionText}`,
       token,
     });
@@ -112,7 +120,7 @@ export async function postSlackQuestion(args: {
     try {
       const result = await client.chat.postMessage({
         channel: channelId,
-        thread_ts: threadId,
+        ...threadField,
         text: questionText,
         blocks: [
           {

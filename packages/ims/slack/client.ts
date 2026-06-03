@@ -311,6 +311,15 @@ export async function sendMessage(
   const workspace = slackAuthRegistry.getChannelWorkspaceName(rawChannelId) || "unknown";
   const botToken = getSlackBotTokenForProcessor(processorId) ?? getSlackBotToken(channelId, threadId);
 
+  // A "synthetic" thread id (`task:{id}` / `cron-job:{id}:{run}` / `cron:{id}`)
+  // is an internal placeholder used by Ode's task/cron schedulers before a
+  // real Slack `thread_ts` exists. Slack rejects these with `invalid_thread_ts`
+  // because they are not valid message timestamps. When the agent runtime
+  // emits intermediate output during a task/cron run, fall back to a
+  // top-level channel post (no `thread_ts`) so the message still lands in
+  // the channel instead of being lost + captured as a Sentry error.
+  const threadIsSynthetic = isSyntheticOwner(threadId);
+
   if (!botToken) {
     log.warn("No Slack bot token available for channel", { channelId });
   }
@@ -320,6 +329,7 @@ export async function sendMessage(
       workspace,
       channel: channelId,
       thread: threadId,
+      threadIsSynthetic,
       botTokenLast6: tokenLast6(botToken),
       text,
       chunks: chunks.length,
@@ -329,6 +339,7 @@ export async function sendMessage(
       workspace,
       channel: channelId,
       thread: threadId,
+      threadIsSynthetic,
       botTokenLast6: tokenLast6(botToken),
       text,
       chunks: chunks.length,
@@ -346,7 +357,7 @@ export async function sendMessage(
     try {
       const result = await slackApp.client.chat.postMessage({
         channel: rawChannelId,
-        thread_ts: threadId,
+        ...(threadIsSynthetic ? {} : { thread_ts: threadId }),
         text: chunk,
         token: botToken,
       });
@@ -358,7 +369,15 @@ export async function sendMessage(
       });
       lastTs = result.ts;
       if (botToken && result.ts) {
-        slackAuthRegistry.setThreadBotToken(rawChannelId, threadId, botToken);
+        // Don't bind a real bot token to a synthetic placeholder thread id —
+        // the real platform-assigned thread is whatever `result.ts` is for
+        // the first message of the run. `setMessageBotToken` covers the
+        // outgoing message itself; the cron/task scheduler seeds the
+        // session for the real thread via `seedCronChannelThreadSession` /
+        // `seedChannelThreadSession`.
+        if (!threadIsSynthetic) {
+          slackAuthRegistry.setThreadBotToken(rawChannelId, threadId, botToken);
+        }
         slackAuthRegistry.setMessageBotToken(rawChannelId, result.ts, botToken);
       }
     } catch (err) {
