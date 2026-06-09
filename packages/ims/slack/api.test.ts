@@ -4,10 +4,20 @@ import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 // the single `./client` module so we don't need a real Slack connection,
 // and expose both the raw `apiCall` surface (used by the streaming helpers)
 // and the typed `chat.postMessage` surface (used by `postSlackQuestion`).
+//
+// IMPORTANT: `mock.module(...)` is process-wide in Bun, so the stub stays in
+// place for every later test file that loads `./client`. To avoid breaking
+// downstream tests that pull other exports (e.g. `sendChannelMessage` used by
+// `packages/core/tasks/scheduler.ts` and `packages/core/test/web-routes.test.ts`),
+// we start from the real module's exports and only override `getApp` /
+// `getSlackBotToken`. This way later imports keep finding every real export.
 const apiCalls: Array<{ method: string; args: Record<string, unknown> }> = [];
 const postMessageCalls: Array<Record<string, unknown>> = [];
 
+const realClient = await import("./client");
+
 mock.module("./client", () => ({
+  ...realClient,
   getApp: () => ({
     client: {
       apiCall: async (method: string, args: Record<string, unknown>) => {
@@ -22,8 +32,8 @@ mock.module("./client", () => ({
       },
     },
   }),
-  // `postSlackQuestion` does not call getSlackBotToken; we still export it
-  // so the module load doesn't fail when ./api re-imports it.
+  // Override so the test never accidentally picks up a stale workspace token
+  // during the test run.
   getSlackBotToken: () => "xoxb-test",
 }));
 
