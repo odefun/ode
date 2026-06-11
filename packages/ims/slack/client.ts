@@ -309,7 +309,6 @@ export async function sendMessage(
   const formattedText = markdownToSlack(text);
   const chunks = splitForSlack(formattedText);
   const workspace = slackAuthRegistry.getChannelWorkspaceName(rawChannelId) || "unknown";
-  const botToken = getSlackBotTokenForProcessor(processorId) ?? getSlackBotToken(channelId, threadId);
 
   // A "synthetic" thread id (`task:{id}` / `cron-job:{id}:{run}` / `cron:{id}`)
   // is an internal placeholder used by Ode's task/cron schedulers before a
@@ -319,6 +318,20 @@ export async function sendMessage(
   // top-level channel post (no `thread_ts`) so the message still lands in
   // the channel instead of being lost + captured as a Sentry error.
   const threadIsSynthetic = isSyntheticOwner(threadId);
+
+  // Token resolution. For real threads, prefer the registry-bound token for
+  // this (channel, thread) — that's the token the inbound router observed
+  // delivering the parent message and is the safest choice for replies. For
+  // synthetic placeholders the call has degenerated to a top-level channel
+  // post (see below); the registry has no entry for a fake `thread_ts`, so
+  // resolve via the channel's workspace first (mirrors `sendChannelMessage`)
+  // before falling back to `getSlackBotToken` to avoid the multi-workspace
+  // edge case where `getSlackBotToken` may return the first registered token
+  // instead of the one for `rawChannelId`.
+  const botToken = getSlackBotTokenForProcessor(processorId)
+    ?? (threadIsSynthetic
+      ? (getWorkspaceBotTokenForChannel(channelId) ?? getSlackBotToken(channelId))
+      : getSlackBotToken(channelId, threadId));
 
   if (!botToken) {
     log.warn("No Slack bot token available for channel", { channelId });
