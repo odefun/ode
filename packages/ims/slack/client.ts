@@ -659,7 +659,19 @@ function createSlackAdapter(processorId?: string): IMAdapter {
       options: string[] | undefined,
       prefix?: string
     ) => {
-      const token = getSlackBotTokenForProcessor(processorId) ?? getSlackBotToken(channelId, threadId);
+      // Mirror the token-resolution logic in `sendMessage`: when the thread
+      // id is a synthetic placeholder (`task:` / `cron-job:` / `cron:`), the
+      // posted question degenerates to a top-level channel post inside
+      // `postSlackQuestion`, so the registry has no entry for that fake
+      // `thread_ts`. Resolve via the channel's workspace first to avoid the
+      // multi-workspace edge case where `getSlackBotToken(channelId, fakeTs)`
+      // can fall back to the first registered token instead of the one bound
+      // to `channelId`.
+      const threadIsSynthetic = isSyntheticOwner(threadId);
+      const token = getSlackBotTokenForProcessor(processorId)
+        ?? (threadIsSynthetic
+          ? (getWorkspaceBotTokenForChannel(channelId) ?? getSlackBotToken(channelId))
+          : getSlackBotToken(channelId, threadId));
       if (!token) {
         // No token -> fall through to plain-text sendMessage so the question
         // still gets delivered through whatever channel/path the caller has.
