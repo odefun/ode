@@ -32,8 +32,8 @@
 //   - 50007 Cannot send messages to this user
 //
 // Lark (open-platform error codes vary; we match the common "permission
-// denied" / "chat not exist" message text):
-//   - chat_not_found / chat does not exist
+// denied" / "chat not exist" / "chat does not exist" message text):
+//   - chat_not_found / chat not exist / chat does not exist
 //   - permission denied (generic; only matched when paired with chat context)
 const PERMANENT_MESSAGE_TOKENS = [
   // Slack
@@ -49,6 +49,12 @@ const PERMANENT_MESSAGE_TOKENS = [
   // Lark
   "chat_not_found",
   "chat not exist",
+  // `larkApi` re-throws the raw `msg` text from the Lark API for some
+  // payloads (notably stale/deleted group chats), which surfaces as the
+  // human-readable "chat does not exist". The shorter "chat not exist"
+  // token does not contain this substring (due to the "does" infix), so
+  // we list it explicitly.
+  "chat does not exist",
 ];
 
 // Discord.js surfaces the raw API code on `err.code` as a number.

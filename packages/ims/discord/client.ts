@@ -123,17 +123,30 @@ async function resolveTextChannel(channelId: string, processorId?: string) {
   // discord.js surfaces these on `err.code` as numbers; we forward them on
   // the wrapper as `discordErrorCodes` and also expose the first as `code`
   // so `isPermanentChannelError` can pick it up via the `code` shape.
+  //
+  // The pinned bot's code is tracked separately: when `processorId` is
+  // provided we know which bot actually owns the channel, so its result
+  // is authoritative and unrelated bots' "permanent" errors (e.g. another
+  // workspace's bot legitimately returning `Missing Access` for a channel
+  // it cannot see) MUST NOT promote the wrapper to permanent. See PR #211
+  // discussion: "Avoid disabling Discord jobs on mixed fetch failures".
   const discordErrorCodes: number[] = [];
-  const captureCode = (error: unknown) => {
+  let pinnedBotErrorCode: number | undefined;
+  let pinnedBotAttempted = false;
+  const captureCode = (error: unknown, isPinnedBot: boolean) => {
     if (typeof error === "object" && error !== null) {
       const code = (error as { code?: unknown }).code;
-      if (typeof code === "number") discordErrorCodes.push(code);
+      if (typeof code === "number") {
+        discordErrorCodes.push(code);
+        if (isPinnedBot) pinnedBotErrorCode = code;
+      }
     }
   };
 
   if (processorId) {
     const pinnedClient = discordClientByProcessorId.get(processorId);
     if (pinnedClient) {
+      pinnedBotAttempted = true;
       try {
         const channel = await pinnedClient.channels.fetch(channelId);
         if (channel && channel.isTextBased()) {
@@ -141,7 +154,7 @@ async function resolveTextChannel(channelId: string, processorId?: string) {
         }
         attempts.push(`bot=${pinnedClient.user?.id || "unknown"}: channel_not_text_or_missing`);
       } catch (error) {
-        captureCode(error);
+        captureCode(error, true);
         const errorMessage = error instanceof Error ? error.message : String(error);
         attempts.push(`bot=${pinnedClient.user?.id || "unknown"}: ${errorMessage}`);
       }
@@ -157,7 +170,7 @@ async function resolveTextChannel(channelId: string, processorId?: string) {
       }
       attempts.push(`bot=${client.user?.id || "unknown"}: channel_not_text_or_missing`);
     } catch (error) {
-      captureCode(error);
+      captureCode(error, false);
       const errorMessage = error instanceof Error ? error.message : String(error);
       attempts.push(`bot=${client.user?.id || "unknown"}: ${errorMessage}`);
     }
@@ -173,14 +186,32 @@ async function resolveTextChannel(channelId: string, processorId?: string) {
 
   const wrapper = new Error(`Discord channel ${channelId} is not text-based or inaccessible`);
   if (discordErrorCodes.length > 0) {
-    // Prefer the most informative code: prioritise "permanent" classes
-    // (10003 Unknown Channel, 50001 Missing Access, 50013 Missing Perms,
-    // 50007 Cannot DM) so isPermanentChannelError can disable the cron row
-    // even if some bots failed transiently.
     const PERMANENT_PRIORITY = new Set([10003, 50001, 50013, 50007]);
-    const permanent = discordErrorCodes.find((c) => PERMANENT_PRIORITY.has(c));
-    (wrapper as Error & { code?: number; discordErrorCodes?: number[] }).code =
-      permanent ?? discordErrorCodes[0];
+
+    // Pick which code to forward as the `code` field consumed by
+    // `isPermanentChannelError`. Rules:
+    //   1. If a pinned bot was attempted, its outcome is authoritative —
+    //      forward its code (if any). Other bots' permanent codes for the
+    //      same channel are unrelated noise.
+    //   2. If no pinned bot was attempted (e.g. cron top-level send with
+    //      no processorId), only treat the failure as permanent when every
+    //      captured code is permanent. Mixed transient+permanent means at
+    //      least one bot might succeed on retry, so do NOT promote.
+    let forwardedCode: number | undefined;
+    if (pinnedBotAttempted) {
+      forwardedCode = pinnedBotErrorCode;
+    } else {
+      const allPermanent = discordErrorCodes.every((c) => PERMANENT_PRIORITY.has(c));
+      if (allPermanent) {
+        forwardedCode = discordErrorCodes.find((c) => PERMANENT_PRIORITY.has(c));
+      } else {
+        forwardedCode = discordErrorCodes[0];
+      }
+    }
+
+    if (forwardedCode !== undefined) {
+      (wrapper as Error & { code?: number; discordErrorCodes?: number[] }).code = forwardedCode;
+    }
     (wrapper as Error & { code?: number; discordErrorCodes?: number[] }).discordErrorCodes =
       [...discordErrorCodes];
   }

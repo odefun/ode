@@ -51,8 +51,35 @@ describe("isPermanentChannelError", () => {
     expect(isPermanentChannelError(wrapper)).toBe(true);
   });
 
+  test("ignores Discord resolveTextChannel wrapper without a forwarded code", () => {
+    // When `resolveTextChannel` cannot confidently identify a permanent
+    // failure (e.g. mixed pinned-bot transient + unrelated-bot permanent),
+    // it forwards a non-permanent or no `code`. The classifier must not
+    // promote those to permanent on the wrapper's message alone. See PR
+    // #211 discussion: "Avoid disabling Discord jobs on mixed fetch
+    // failures".
+    const noCode = new Error("Discord channel 123 is not text-based or inaccessible");
+    expect(isPermanentChannelError(noCode)).toBe(false);
+
+    const transientCode = Object.assign(
+      new Error("Discord channel 123 is not text-based or inaccessible"),
+      { code: 500 },
+    );
+    expect(isPermanentChannelError(transientCode)).toBe(false);
+  });
+
   test("matches Lark chat_not_found", () => {
     expect(isPermanentChannelError(new Error("chat_not_found: chat does not exist"))).toBe(true);
+  });
+
+  test("matches Lark deleted-chat message text alone", () => {
+    // larkApi() re-throws the raw `msg` field from the Lark API for some
+    // payloads — for stale/deleted group chats this surfaces as just
+    // "chat does not exist", without the `chat_not_found` token. The
+    // shorter "chat not exist" token does NOT match this string because
+    // of the "does" infix, so we list the long form explicitly. See PR
+    // #211 discussion: "Match Lark's deleted-chat message".
+    expect(isPermanentChannelError(new Error("chat does not exist"))).toBe(true);
   });
 
   test("ignores transient / retryable failures", () => {
