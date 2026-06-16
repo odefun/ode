@@ -54,15 +54,16 @@ const CRON_PREPARE_TIMEOUT_MS = parsePositiveIntEnv(
   2 * 60_000
 );
 
-/**
- * Hard upper bound for the actual agent turn (`agent.sendMessage`). OpenCode
- * sessions can wedge waiting on approvals or remote provider calls; we bound
- * the run so a stuck turn doesn't permanently lock out the job.
- */
-const CRON_AGENT_TIMEOUT_MS = parsePositiveIntEnv(
-  process.env.ODE_CRON_AGENT_TIMEOUT_MS,
-  2 * 60 * 60_000
-);
+// NOTE: There is intentionally no hard upper bound on the agent turn itself
+// (`agent.sendMessage`) anymore. Cron jobs that drive long agent workflows
+// (Sentry triage, board grooming, multi-PR sweeps) routinely exceeded the
+// previous 2h bound and surfaced as `Request timed out` failures even though
+// the underlying agent was making progress. We rely on:
+//   * the prepare-step timeout above to guarantee the in-process
+//     `runningJobIds` lock can't be wedged by a hung session/worktree setup;
+//   * the agent adapter's own per-request handling for genuinely stuck turns.
+// If a turn really hangs forever, the daemon restart path
+// (`reconcileInterruptedCronJobs`) will still surface and retry it.
 
 function parsePositiveIntEnv(raw: string | undefined, fallback: number): number {
   if (!raw) return fallback;
@@ -336,17 +337,13 @@ async function runCronJob(job: CronJobRecord, minuteStartMs: number): Promise<vo
       });
     }
 
-    const responses = await withTimeout(
-      agent.sendMessage(
-        job.channelId,
-        sessionId,
-        job.messageText,
-        cwd,
-        options,
-        buildCronAgentContext(job, runId)
-      ),
-      CRON_AGENT_TIMEOUT_MS,
-      "Cron agent turn"
+    const responses = await agent.sendMessage(
+      job.channelId,
+      sessionId,
+      job.messageText,
+      cwd,
+      options,
+      buildCronAgentContext(job, runId)
     );
     const finalText = buildFinalResponseText(responses) ?? "_Done_";
 

@@ -70,18 +70,14 @@ const TASK_PREPARE_TIMEOUT_MS = parsePositiveIntEnv(
   2 * 60_000,
 );
 
-/**
- * Hard upper bound for the actual agent turn (`agent.sendMessage`). OpenCode
- * sessions can wedge waiting on approvals or remote provider calls; we bound
- * the run so a stuck turn doesn't permanently lock out the task row. Matches
- * the cron default (2h) — tasks tend to be heavier since they often do
- * scripted long-running work, but anything longer than 2h should really be
- * split into multiple scheduled runs.
- */
-const TASK_AGENT_TIMEOUT_MS = parsePositiveIntEnv(
-  process.env.ODE_TASK_AGENT_TIMEOUT_MS,
-  2 * 60 * 60_000,
-);
+// NOTE: There is intentionally no hard upper bound on the agent turn itself
+// (`agent.sendMessage`) anymore. Tasks often drive long-running scripted
+// work (deploys, batch fixes, scheduled audits) that legitimately runs for
+// hours, and the previous 2h cap was surfacing as `Request timed out` even
+// when the agent was making progress. Hung sessions are still bounded by:
+//   * the prepare-step timeout above (covers session/worktree setup);
+//   * the agent adapter's own per-request handling;
+//   * `reconcileInterruptedTasks` on daemon restart.
 
 function parsePositiveIntEnv(raw: string | undefined, fallback: number): number {
   if (!raw) return fallback;
@@ -415,17 +411,13 @@ async function runTask(task: TaskRecord): Promise<void> {
       });
     }
 
-    const responses = await withTimeout(
-      agent.sendMessage(
-        task.channelId,
-        sessionId,
-        task.messageText,
-        cwd,
-        options,
-        buildTaskAgentContext(task),
-      ),
-      TASK_AGENT_TIMEOUT_MS,
-      "Task agent turn",
+    const responses = await agent.sendMessage(
+      task.channelId,
+      sessionId,
+      task.messageText,
+      cwd,
+      options,
+      buildTaskAgentContext(task),
     );
     const finalText = buildFinalResponseText(responses) ?? "_Done_";
 
