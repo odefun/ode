@@ -133,7 +133,15 @@ async function resolveTextChannel(channelId: string, processorId?: string) {
   const discordErrorCodes: number[] = [];
   let pinnedBotErrorCode: number | undefined;
   let pinnedBotAttempted = false;
+  // Count every fetch attempt that ended in a thrown error — not just the
+  // subset that carried a numeric `err.code`. The wrapper's
+  // `isPermanentChannelError` classification must NOT promote to permanent
+  // when any attempt failed transiently (e.g. ECONNRESET, generic network
+  // error), because that bot might succeed on retry. See PR #211 discussion:
+  // "Require every Discord fetch attempt to be permanent".
+  let totalFailedAttempts = 0;
   const captureCode = (error: unknown, isPinnedBot: boolean) => {
+    totalFailedAttempts += 1;
     if (typeof error === "object" && error !== null) {
       const code = (error as { code?: unknown }).code;
       if (typeof code === "number") {
@@ -195,15 +203,21 @@ async function resolveTextChannel(channelId: string, processorId?: string) {
     //      same channel are unrelated noise.
     //   2. If no pinned bot was attempted (e.g. cron top-level send with
     //      no processorId), only treat the failure as permanent when every
-    //      captured code is permanent. Mixed transient+permanent means at
-    //      least one bot might succeed on retry, so do NOT promote.
+    //      failed attempt carried a permanent code. A transient failure
+    //      (ECONNRESET, network blip) without a numeric `code` would not
+    //      appear in `discordErrorCodes`, so counting only those would let
+    //      an unrelated bot's permanent code promote the wrapper even though
+    //      a retry might succeed. We therefore also require that the number
+    //      of captured permanent codes equals the number of failed attempts.
     let forwardedCode: number | undefined;
     if (pinnedBotAttempted) {
       forwardedCode = pinnedBotErrorCode;
     } else {
-      const allPermanent = discordErrorCodes.every((c) => PERMANENT_PRIORITY.has(c));
-      if (allPermanent) {
-        forwardedCode = discordErrorCodes.find((c) => PERMANENT_PRIORITY.has(c));
+      const permanentCodes = discordErrorCodes.filter((c) => PERMANENT_PRIORITY.has(c));
+      const allAttemptsPermanent =
+        permanentCodes.length === totalFailedAttempts && totalFailedAttempts > 0;
+      if (allAttemptsPermanent) {
+        forwardedCode = permanentCodes[0];
       } else {
         forwardedCode = discordErrorCodes[0];
       }
