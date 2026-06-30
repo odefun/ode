@@ -6,10 +6,12 @@ import {
   createActiveRequest,
   failActiveRequest,
   getPendingQuestion,
+  loadSession,
   saveSession,
   setPendingQuestion,
   updateActiveRequest,
   type ActiveRequest,
+  type PendingQuestion,
   type PersistedSession,
   type TrackedTodo,
   type TrackedTool,
@@ -27,6 +29,7 @@ import { maybeGenerateSessionTitle } from "@/core/runtime/session-title";
 import type { AgentAdapter, IMAdapter, StatusStreamChunk } from "@/core/types";
 import type { RuntimeRequestContext } from "@/core/kernel/request-context";
 import { formatSingleQuestionPrompt } from "@/core/runtime/helpers";
+import { isSyntheticOwner } from "@/ims/shared/synthetic-owner";
 import {
   buildSessionMessageState,
   createStatusStreamDiffer,
@@ -54,6 +57,34 @@ function isStatusStreamingEnabled(
   if (override === "0" || override === "false") return false;
   if (platform && platform !== "slack") return false;
   return getSlackStatusModeForChannel(channelId) !== "legacy";
+}
+
+function mirrorPendingQuestionToRealThread(params: {
+  channelId: string;
+  syntheticThreadId: string;
+  realThreadId: string | undefined;
+  pendingQuestion: PendingQuestion;
+}): void {
+  const { channelId, syntheticThreadId, realThreadId, pendingQuestion } = params;
+  if (!realThreadId || realThreadId === syntheticThreadId || !isSyntheticOwner(syntheticThreadId)) {
+    return;
+  }
+
+  const syntheticSession = loadSession(channelId, syntheticThreadId);
+  if (!syntheticSession) return;
+
+  const existingRealSession = loadSession(channelId, realThreadId);
+  if (existingRealSession) {
+    existingRealSession.pendingQuestion = pendingQuestion;
+    saveSession(existingRealSession);
+    return;
+  }
+
+  saveSession({
+    ...syntheticSession,
+    threadId: realThreadId,
+    pendingQuestion,
+  });
 }
 
 /**
@@ -568,11 +599,12 @@ async function startKernelEventStreamWatcher(params: {
       }
 
       void (async () => {
+        let questionMessageTs: string | undefined;
         try {
           const first = normalized[0]!;
           const prefix = normalized.length > 1 ? `(1/${normalized.length}) ` : "";
           if (typeof deps.im.sendQuestion === "function") {
-            await deps.im.sendQuestion(
+            questionMessageTs = await deps.im.sendQuestion(
               request.channelId,
               request.replyThreadId,
               first.question,
@@ -581,7 +613,7 @@ async function startKernelEventStreamWatcher(params: {
             );
           } else {
             const promptText = formatSingleQuestionPrompt(first, 0, normalized.length);
-            await deps.im.sendMessage(request.channelId, request.replyThreadId, promptText);
+            questionMessageTs = await deps.im.sendMessage(request.channelId, request.replyThreadId, promptText);
           }
         } catch (err) {
           log.warn("Failed to post ask_user question", {
@@ -592,14 +624,21 @@ async function startKernelEventStreamWatcher(params: {
           });
         }
 
-        setPendingQuestion(request.channelId, request.threadId, {
+        const pendingQuestion: PendingQuestion = {
           requestId,
           sessionId: properties.sessionID ?? request.sessionId,
           askedAt: Date.now(),
           questions: normalized,
-          messageTs: request.statusMessageTs,
+          messageTs: questionMessageTs ?? request.statusMessageTs,
           collectedAnswers: [],
           questionDetailId,
+        };
+        setPendingQuestion(request.channelId, request.threadId, pendingQuestion);
+        mirrorPendingQuestionToRealThread({
+          channelId: request.channelId,
+          syntheticThreadId: request.threadId,
+          realThreadId: questionMessageTs,
+          pendingQuestion,
         });
       })();
       return;
