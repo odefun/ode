@@ -679,7 +679,7 @@ function createSlackAdapter(processorId?: string): IMAdapter {
         return sendMessage(channelId, threadId, `${prefix ?? ""}${question}${optionText}`, processorId);
       }
       const { postSlackQuestion } = await import("./api");
-      return postSlackQuestion({
+      const questionMessageTs = await postSlackQuestion({
         channelId,
         threadId,
         question,
@@ -687,6 +687,17 @@ function createSlackAdapter(processorId?: string): IMAdapter {
         prefix,
         token,
       });
+      // The synthetic branch above turns the question into a top-level channel
+      // post. The handler that processes the user's button click / threaded
+      // reply later looks up the bot token via `getMessageBotToken` on the
+      // selection message's ts (`handleButtonSelection`), so we must register
+      // the resolved `token` against the posted question's `ts`. Otherwise
+      // multi-workspace installs can mis-route follow-ups through the wrong
+      // processor (Codex P2 on PR #212).
+      if (questionMessageTs) {
+        slackAuthRegistry.setMessageBotToken(channelId, questionMessageTs, token);
+      }
+      return questionMessageTs;
     },
     updateMessage: (channelId: string, messageTs: string, text: string) =>
       updateMessage(channelId, messageTs, text, processorId),
