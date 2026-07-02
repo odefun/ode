@@ -689,13 +689,23 @@ function createSlackAdapter(processorId?: string): IMAdapter {
       });
       // The synthetic branch above turns the question into a top-level channel
       // post. The handler that processes the user's button click / threaded
-      // reply later looks up the bot token via `getMessageBotToken` on the
-      // selection message's ts (`handleButtonSelection`), so we must register
-      // the resolved `token` against the posted question's `ts`. Otherwise
-      // multi-workspace installs can mis-route follow-ups through the wrong
-      // processor (Codex P2 on PR #212).
+      // reply later looks up the bot token via BOTH
+      //   getMessageBotToken(channel, selectionMessageTs)   → this is the ts
+      //     of the user's selection reply (not the question), created inside
+      //     `commands.ts` via `chat.postMessage`, so no registry entry exists.
+      //   getThreadBotToken(channel, threadId)              → for a top-level
+      //     question, Slack derives `threadId` from
+      //     `body.message?.thread_ts || body.message?.ts`, which resolves to
+      //     the question message's own ts.
+      // Register the resolved `token` under both the message-token map (for
+      // parity with sendMessage's outgoing binding) AND the thread-token map
+      // keyed by the question ts, so the button-selection path can recover
+      // the correct workspace token in multi-workspace installs where the
+      // channel has not yet been bound by the message router (Codex P2 on
+      // PR #212).
       if (questionMessageTs) {
         slackAuthRegistry.setMessageBotToken(channelId, questionMessageTs, token);
+        slackAuthRegistry.setThreadBotToken(channelId, questionMessageTs, token);
       }
       return questionMessageTs;
     },
