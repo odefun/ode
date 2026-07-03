@@ -89,6 +89,30 @@ describe("Slack streaming API helpers", () => {
       token: "xoxb-test",
     });
   });
+
+  it("omits thread_ts when starting a stream from a synthetic task/cron placeholder", async () => {
+    const { startSlackStream } = await import("./api");
+
+    await startSlackStream({
+      channelId: "C1",
+      threadId: "cron-job:a86fbdc5-01df-4caf-9e0c-c0c199f00379:1780441200000",
+      recipientUserId: "U1",
+      recipientTeamId: "T1",
+      seedPlanTitle: "Working",
+      token: "xoxb-test",
+    });
+
+    expect(apiCalls).toHaveLength(1);
+    expect(apiCalls[0]?.method).toBe("chat.startStream");
+    expect(apiCalls[0]?.args).toMatchObject({
+      channel: "C1",
+      task_display_mode: "plan",
+      recipient_user_id: "U1",
+      recipient_team_id: "T1",
+      token: "xoxb-test",
+    });
+    expect(apiCalls[0]?.args).not.toHaveProperty("thread_ts");
+  });
 });
 
 describe("postSlackQuestion thread_ts handling", () => {

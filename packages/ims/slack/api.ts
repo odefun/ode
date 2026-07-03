@@ -390,9 +390,16 @@ export async function startSlackStream(args: {
   const recipientTeamId = requireString(args.recipientTeamId, "recipientTeamId");
   const token = requireString(args.token, "token");
   const client = getApp().client;
+
+  // Task/cron placeholder owners are not valid Slack timestamps. If status
+  // streaming starts before a real thread exists, omit `thread_ts` so the
+  // stream message starts at the top level instead of failing with
+  // `invalid_thread_ts`.
+  const threadField = isSyntheticOwner(threadId) ? {} : { thread_ts: threadId };
+
   const result = await client.apiCall("chat.startStream", {
     channel: channelId,
-    thread_ts: threadId,
+    ...threadField,
     task_display_mode: "plan",
     recipient_user_id: recipientUserId,
     recipient_team_id: recipientTeamId,
