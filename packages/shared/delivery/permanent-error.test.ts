@@ -103,4 +103,21 @@ describe("isPermanentChannelError", () => {
     // must remain retryable from this helper's perspective.
     expect(isPermanentChannelError(new Error("message_not_found"))).toBe(false);
   });
+
+  test("matches the synthetic 'Lark send returned no message id' wrapper", () => {
+    // `packages/core/cron/scheduler.ts::sendResultToChannel` synthesizes
+    // this error when `sendLarkChannelMessage` returns `undefined`
+    // (missing Lark credentials for the channel — a permanent config
+    // problem the daemon cannot self-heal). The wrapper text embeds
+    // `chat_not_found` so this classifier catches it via the shared
+    // token list. See PR #211 review: "Treat undefined sends as delivery
+    // failures".
+    expect(
+      isPermanentChannelError(
+        new Error(
+          "Lark send returned no message id for channel oc_xxxx (chat_not_found or credentials missing)",
+        ),
+      ),
+    ).toBe(true);
+  });
 });

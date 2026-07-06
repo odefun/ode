@@ -140,7 +140,22 @@ async function sendResultToChannel(
   if (job.platform === "discord") {
     return sendDiscordChannelMessage(job.channelId, text);
   }
-  return sendLarkChannelMessage(job.channelId, text);
+  const larkResult = await sendLarkChannelMessage(job.channelId, text);
+  if (larkResult === undefined) {
+    // `sendLarkChannelMessage` returns `undefined` (without throwing) only
+    // when `getLarkCredentialsForProcessor` cannot find credentials for the
+    // channel — i.e. the Lark workspace/channel config has been removed.
+    // Without this guard the cron scheduler treats the run as delivered,
+    // marks it completed, and the job stays enabled and silently
+    // undelivered forever (see PR #211 review: "Treat undefined sends as
+    // delivery failures"). Throwing a message whose text matches
+    // `isPermanentChannelError` lets the existing catch-branch auto-
+    // disable this job the same way an explicit `chat_not_found` would.
+    throw new Error(
+      `Lark send returned no message id for channel ${job.channelId} (chat_not_found or credentials missing)`,
+    );
+  }
+  return larkResult;
 }
 
 /**
