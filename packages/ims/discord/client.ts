@@ -209,6 +209,19 @@ async function resolveTextChannel(channelId: string, processorId?: string) {
     //      an unrelated bot's permanent code promote the wrapper even though
     //      a retry might succeed. We therefore also require that the number
     //      of captured permanent codes equals the number of failed attempts.
+    //
+    //      When the attempts are mixed (some permanent, some not), we must
+    //      NOT forward any permanent code as the wrapper's `code` field —
+    //      otherwise `isPermanentChannelError` (which classifies purely on
+    //      the numeric `code`) would auto-disable the cron even though at
+    //      least one retryable failure was in the mix. We fall back to the
+    //      first *non-permanent* code (still useful diagnostic signal on
+    //      the wrapper without triggering permanent classification); if
+    //      every captured code is permanent but `totalFailedAttempts`
+    //      exceeds that count (i.e. an untyped transient error is also in
+    //      play), we suppress the code entirely. See PR #211 discussion:
+    //      "Avoid forwarding a permanent code after a mixed Discord
+    //      failure".
     let forwardedCode: number | undefined;
     if (pinnedBotAttempted) {
       forwardedCode = pinnedBotErrorCode;
@@ -219,7 +232,12 @@ async function resolveTextChannel(channelId: string, processorId?: string) {
       if (allAttemptsPermanent) {
         forwardedCode = permanentCodes[0];
       } else {
-        forwardedCode = discordErrorCodes[0];
+        // Mixed attempts: never expose a permanent code on the wrapper.
+        // Prefer the first non-permanent numeric code for diagnostics; if
+        // no non-permanent code was captured, leave `code` undefined so
+        // the failure stays classified as retryable.
+        const nonPermanentCode = discordErrorCodes.find((c) => !PERMANENT_PRIORITY.has(c));
+        forwardedCode = nonPermanentCode;
       }
     }
 

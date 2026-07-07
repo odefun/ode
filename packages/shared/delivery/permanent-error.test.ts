@@ -68,6 +68,22 @@ describe("isPermanentChannelError", () => {
     expect(isPermanentChannelError(transientCode)).toBe(false);
   });
 
+  test("does not classify wrapper as permanent when only discordErrorCodes carries permanent codes", () => {
+    // Regression guard for PR #211 review "Avoid forwarding a permanent
+    // code after a mixed Discord failure": when `resolveTextChannel`
+    // observes a mixed set of failures (e.g. bot A returned 10003 Unknown
+    // Channel, bot B returned 50035 Invalid Form Body), the wrapper still
+    // exposes every captured code on `discordErrorCodes` for diagnostics,
+    // but `code` must be undefined or non-permanent. `isPermanentChannelError`
+    // only inspects `code`, so a wrapper carrying `discordErrorCodes:
+    // [10003, 50035]` with no `code` must NOT be classified as permanent.
+    const wrapper = Object.assign(
+      new Error("Discord channel 123 is not text-based or inaccessible"),
+      { discordErrorCodes: [10003, 50035] },
+    );
+    expect(isPermanentChannelError(wrapper)).toBe(false);
+  });
+
   test("matches Lark chat_not_found", () => {
     expect(isPermanentChannelError(new Error("chat_not_found: chat does not exist"))).toBe(true);
   });
