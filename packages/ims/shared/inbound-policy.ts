@@ -7,6 +7,7 @@ export function defaultInboundPolicy(params: {
   hasAnyMention: boolean;
   mentionedBot: boolean;
   activeThread: boolean;
+  ambientMode: boolean;
   normalizedText: string;
   detectStop?: boolean;
 }): InboundDecision {
@@ -35,8 +36,8 @@ export function defaultInboundPolicy(params: {
   }
 
   const shouldProcess = params.isTopLevel
-    ? params.mentionedBot
-    : (params.mentionedBot || params.activeThread || params.threadOwnerMessage);
+    ? (params.ambientMode || params.mentionedBot)
+    : (params.ambientMode || params.mentionedBot || params.activeThread || params.threadOwnerMessage);
 
   if (!shouldProcess) {
     return { kind: "ignore", reason: "not_mentioned_and_inactive" };
