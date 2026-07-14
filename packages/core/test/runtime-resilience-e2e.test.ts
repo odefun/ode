@@ -213,6 +213,7 @@ function toInboundEvent(params: {
     isTopLevel: false,
     mentionedBot: true,
     activeThread: true,
+    ambientMode: false,
     rawText: params.text,
     normalizedText: params.text,
     receivedAtMs: Date.now(),

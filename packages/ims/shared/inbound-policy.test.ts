@@ -10,6 +10,7 @@ describe("defaultInboundPolicy", () => {
       hasAnyMention: true,
       mentionedBot: false,
       activeThread: true,
+      ambientMode: false,
       normalizedText: "<@other> handle this",
     });
 
@@ -24,6 +25,7 @@ describe("defaultInboundPolicy", () => {
       hasAnyMention: false,
       mentionedBot: false,
       activeThread: true,
+      ambientMode: false,
       normalizedText: "continue",
     });
 
@@ -44,6 +46,7 @@ describe("defaultInboundPolicy", () => {
       hasAnyMention: false,
       mentionedBot: false,
       activeThread: false,
+      ambientMode: false,
       normalizedText: "thanks, now do X",
     });
 
@@ -58,6 +61,7 @@ describe("defaultInboundPolicy", () => {
       hasAnyMention: false,
       mentionedBot: false,
       activeThread: false,
+      ambientMode: false,
       normalizedText: "random chatter",
     });
 
