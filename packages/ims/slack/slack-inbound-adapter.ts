@@ -12,6 +12,7 @@ export class SlackInboundAdapter implements InboundAdapter {
       hasAnyMention: event.hasAnyMention ?? event.mentionedBot,
       mentionedBot: event.mentionedBot,
       activeThread: event.activeThread,
+      ambientMode: event.ambientMode,
       normalizedText: event.normalizedText,
     });
   }

@@ -6,6 +6,7 @@ import {
 } from "@/ims/shared/incoming-message-processor";
 import type { InboundDecision } from "@/core/model/inbound-decision";
 import type { RawInboundEvent } from "@/core/model/raw-inbound-event";
+import { getChannelAmbientMode } from "@/config/local/ode-channel";
 import { RuntimeCache } from "@/shared/cache/runtime-cache";
 import { SlackInboundAdapter } from "@/ims/slack/slack-inbound-adapter";
 import {
@@ -167,16 +168,17 @@ async function maybeHandleLauncherCommand(params: {
   deps: RouterDeps;
   cleanText: string;
   isMention: boolean;
+  ambientMode: boolean;
   channelId: string;
   threadId: string;
   userId: string;
   client: any;
   say: any;
 }): Promise<boolean> {
-  const { deps, cleanText, isMention, channelId, threadId, userId, client, say } = params;
+  const { deps, cleanText, isMention, ambientMode, channelId, threadId, userId, client, say } = params;
   const command = parseIncomingCommand(cleanText);
   if (command === "setting") {
-    if (isMention) {
+    if (isMention || ambientMode) {
       log.info("Slack settings launcher command matched", {
         channelId,
         userId,
@@ -193,7 +195,7 @@ async function maybeHandleLauncherCommand(params: {
     return true;
   }
   if (command === "stats") {
-    if (isMention) {
+    if (isMention || ambientMode) {
       log.info("Slack delivery stats command matched", {
         channelId,
         userId,
@@ -210,7 +212,7 @@ async function maybeHandleLauncherCommand(params: {
     return true;
   }
   if (command === "cron") {
-    if (isMention) {
+    if (isMention || ambientMode) {
       log.info("Slack cron launcher command matched", {
         channelId,
         userId,
@@ -345,6 +347,7 @@ export function registerSlackMessageRouter(deps: RouterDeps): void {
       const hasAnyMention = mentionedUserIds.length > 0;
       const isMention = currentBotUserId ? mentionedUserIds.includes(currentBotUserId) : false;
       const cleanText = stripBotMention(text, currentBotUserId);
+      const ambientMode = getChannelAmbientMode(channelId);
       logSlackTrace("Slack mention parse", {
         channelId,
         threadId,
@@ -382,6 +385,7 @@ export function registerSlackMessageRouter(deps: RouterDeps): void {
         hasAnyMention,
         mentionedBot: isMention,
         activeThread: threadActive,
+        ambientMode,
         rawText: text,
         normalizedText: cleanText,
         receivedAtMs: Date.now(),
@@ -417,6 +421,7 @@ export function registerSlackMessageRouter(deps: RouterDeps): void {
         deps,
         cleanText,
         isMention,
+        ambientMode,
         channelId,
         threadId,
         userId,
