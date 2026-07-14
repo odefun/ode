@@ -17,5 +17,6 @@ export type RawInboundEvent = Readonly<{
   activeThread: boolean;
   rawText: string;
   normalizedText: string;
+  ambientMode: boolean;
   receivedAtMs: number;
 }>;
