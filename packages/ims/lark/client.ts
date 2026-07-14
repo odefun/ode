@@ -1130,6 +1130,7 @@ async function processLarkIncomingEvent(event: LarkIncomingEvent, processorAppId
     hasAnyMention,
     mentionedBot: isMentioned,
     activeThread: active,
+    ambientMode: false,
     rawText,
     normalizedText: text,
     receivedAtMs: Date.now(),
