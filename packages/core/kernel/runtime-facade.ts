@@ -156,6 +156,7 @@ export class KernelRuntimeFacade {
         hasAnyMention: event.hasAnyMention ?? event.mentionedBot,
         mentionedBot: event.mentionedBot,
         activeThread: event.activeThread,
+        ambientMode: event.ambientMode,
         normalizedText: event.normalizedText,
       }),
     };
@@ -176,6 +177,7 @@ export class KernelRuntimeFacade {
       hasAnyMention: event.hasAnyMention ?? event.mentionedBot,
       mentionedBot: event.mentionedBot,
       activeThread: event.activeThread,
+      ambientMode: event.ambientMode,
       normalizedText: event.normalizedText,
     });
 
@@ -235,6 +237,7 @@ export class KernelRuntimeFacade {
       hasAnyMention: false,
       mentionedBot: true,
       activeThread: true,
+      ambientMode: false,
       rawText: selection,
       normalizedText: selection,
       receivedAtMs: Date.now(),
@@ -391,6 +394,7 @@ export class KernelRuntimeFacade {
       hasAnyMention: false,
       mentionedBot: true,
       activeThread: true,
+      ambientMode: false,
       rawText: text,
       normalizedText: text,
       receivedAtMs: Date.now(),

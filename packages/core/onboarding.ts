@@ -319,6 +319,7 @@ async function setupWorkspaces(rl: Interface, config: OdeConfig): Promise<OdeCon
           agentProvider: channel.agentProvider ?? "opencode",
           baseBranch: channel.baseBranch?.trim() || "main",
           channelSystemMessage: channel.channelSystemMessage ?? "",
+          ambientMode: false,
         })),
       };
       const existingWorkspace = nextConfig.workspaces.find((item) => item.id === workspace.id);
