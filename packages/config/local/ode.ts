@@ -97,6 +97,7 @@ function mergeDashboardConfig(config: OdeConfig, dashboardConfig: DashboardConfi
       ...channel,
       agentProvider: channel.agentProvider ?? "opencode",
       channelSystemMessage: channel.channelSystemMessage ?? "",
+      ambientMode: false,
     })),
   }));
 

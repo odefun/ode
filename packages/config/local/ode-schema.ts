@@ -91,6 +91,7 @@ const channelDetailSchema = z.object({
   workingDirectory: z.string().optional().default(""),
   baseBranch: z.string().optional().default("main"),
   channelSystemMessage: z.string().optional().default(""),
+  ambientMode: z.boolean().optional().default(false),
 });
 
 const updateSchema = z.object({

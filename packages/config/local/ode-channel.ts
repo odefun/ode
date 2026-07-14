@@ -111,6 +111,14 @@ export function setChannelModel(channelId: string, model: string): void {
   updateChannel(channelId, (channel) => ({ ...channel, model }));
 }
 
+export function getChannelAmbientMode(channelId: string): boolean {
+  return getChannelDetails(channelId)?.ambientMode ?? false;
+}
+
+export function setChannelAmbientMode(channelId: string, ambientMode: boolean): void {
+  updateChannel(channelId, (channel) => ({ ...channel, ambientMode }));
+}
+
 export function setChannelAgentProvider(
   channelId: string,
   agentProvider: AgentProvider
