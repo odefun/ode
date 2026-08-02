@@ -79,6 +79,24 @@
     totalPages: number;
   };
 
+  type OdeRunEvent = {
+    id: string;
+    schemaVersion: number;
+    timestamp: number;
+    type: string;
+    providerId: string;
+    sessionId: string;
+    runId?: string;
+    itemId?: string;
+    data: Record<string, unknown>;
+  };
+
+  type RunEventPage = {
+    items: OdeRunEvent[];
+    total: number;
+    limit: number;
+  };
+
   const threadId = $derived(decodeURIComponent(($page.params as Record<string, string>).threadId ?? ""));
 
   let thread = $state<MessageThreadSummary | null>(null);
@@ -89,8 +107,10 @@
     pageSize: 10,
     totalPages: 1,
   });
+  let runEventPage = $state<RunEventPage>({ items: [], total: 0, limit: 100 });
   let isThreadLoading = $state(false);
   let isDetailLoading = $state(false);
+  let isEventLoading = $state(false);
   let statusMessage = $state("");
 
   function t(en: string, zh: string): string {
@@ -165,8 +185,39 @@
     return JSON.stringify(context, null, 2);
   }
 
+  function formatRunEvent(event: OdeRunEvent): string {
+    const data = event.data;
+    if (event.type === "run.progress") return String(data.phase ?? "Working");
+    if (event.type === "message.delta" || event.type === "reasoning.summary.delta") {
+      return String(data.text ?? "");
+    }
+    if (event.type.startsWith("tool.")) {
+      const title = typeof data.title === "string" && data.title.trim()
+        ? data.title
+        : String(data.name ?? "tool");
+      const metadata = data.metadata && typeof data.metadata === "object"
+        ? data.metadata as Record<string, unknown>
+        : null;
+      const child = metadata?.childSession === true
+        ? ` · ${String(metadata.childTitle ?? t("subagent", "子代理"))}`
+        : "";
+      return `${title}${child}`;
+    }
+    if (event.type === "plan.updated") {
+      const items = Array.isArray(data.items) ? data.items : [];
+      return `${items.length} ${t("plan items", "项计划")}`;
+    }
+    if (event.type === "usage.updated") {
+      return `${String(data.total ?? 0)} tokens`;
+    }
+    if (event.type === "run.failed") return String(data.message ?? "Failed");
+    if (event.type === "run.completed") return String(data.text ?? data.reason ?? "Completed");
+    if (event.type === "run.started") return String(data.transport ?? "Started");
+    return JSON.stringify(data);
+  }
+
   async function loadThreadSummary(): Promise<void> {
-    if (!threadId) return;
+    if (!threadId || isThreadLoading) return;
     isThreadLoading = true;
     try {
       const response = await fetch(`/api/message-threads/${encodeURIComponent(threadId)}/summary`);
@@ -187,7 +238,7 @@
   }
 
   async function loadDetails(nextPage = detailPage.page): Promise<void> {
-    if (!threadId) return;
+    if (!threadId || isDetailLoading) return;
     isDetailLoading = true;
     try {
       const response = await fetch(
@@ -209,13 +260,45 @@
     }
   }
 
+  async function loadRunEvents(): Promise<void> {
+    if (!threadId || isEventLoading) return;
+    isEventLoading = true;
+    try {
+      const response = await fetch(
+        `/api/message-threads/${encodeURIComponent(threadId)}/events?limit=${runEventPage.limit}`,
+      );
+      const payload = (await response.json()) as {
+        ok?: boolean;
+        error?: string;
+        result?: RunEventPage;
+      };
+      if (!response.ok || !payload.ok || !payload.result) {
+        throw new Error(payload.error || "Failed to load run events");
+      }
+      runEventPage = payload.result;
+    } catch (error) {
+      statusMessage = `Run events load failed: ${error instanceof Error ? error.message : String(error)}`;
+    } finally {
+      isEventLoading = false;
+    }
+  }
+
   async function refresh(): Promise<void> {
     statusMessage = "";
-    await Promise.all([loadThreadSummary(), loadDetails(detailPage.page)]);
+    await Promise.all([loadThreadSummary(), loadDetails(detailPage.page), loadRunEvents()]);
   }
 
   onMount(() => {
     void refresh();
+    const pollTimer = window.setInterval(() => {
+      void (async () => {
+        const wasPending = (thread?.pendingDetailCount ?? 0) > 0;
+        await loadThreadSummary();
+        if (!wasPending && (thread?.pendingDetailCount ?? 0) <= 0) return;
+        await Promise.all([loadRunEvents(), loadDetails(detailPage.page)]);
+      })();
+    }, 2_000);
+    return () => window.clearInterval(pollTimer);
   });
 </script>
 
@@ -274,6 +357,41 @@
           <summary class="cursor-pointer text-xs text-[hsl(var(--muted-foreground))]">{t("Thread context", "会话上下文")}</summary>
           <pre class="mt-2 max-h-[240px] overflow-auto rounded-md bg-[hsl(var(--muted)/0.45)] p-3 text-xs leading-6 whitespace-pre-wrap">{formatContext(thread.context)}</pre>
         </details>
+      {/if}
+    </div>
+
+    <div class="mb-5 rounded-lg border p-4">
+      <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div class="flex items-center gap-2">
+          <h3 class="text-sm font-semibold">{t("Live run events", "实时运行事件")}</h3>
+          <Badge variant="outline">{runEventPage.total}</Badge>
+          {#if thread.pendingDetailCount > 0}
+            <Badge variant="secondary">{t("Auto-refreshing", "自动刷新中")}</Badge>
+          {/if}
+        </div>
+        {#if isEventLoading}
+          <span class="text-xs text-[hsl(var(--muted-foreground))]">{t("Updating...", "更新中...")}</span>
+        {/if}
+      </div>
+
+      {#if runEventPage.items.length === 0}
+        <p class="text-sm text-[hsl(var(--muted-foreground))]">
+          {t("No run events recorded yet.", "暂无运行事件。")}
+        </p>
+      {:else}
+        <div class="max-h-[420px] space-y-2 overflow-auto">
+          {#each [...runEventPage.items].reverse() as event (event.id)}
+            <div class="rounded-md bg-[hsl(var(--muted)/0.35)] px-3 py-2">
+              <div class="mb-1 flex flex-wrap items-center gap-2">
+                <Badge variant="outline">{event.type}</Badge>
+                <span class="text-xs text-[hsl(var(--muted-foreground))]">
+                  {formatTimestamp(event.timestamp)}
+                </span>
+              </div>
+              <p class="whitespace-pre-wrap break-words text-xs leading-5">{formatRunEvent(event)}</p>
+            </div>
+          {/each}
+        </div>
       {/if}
     </div>
 

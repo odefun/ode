@@ -8,5 +8,6 @@ export {
   subscribeToSession,
   startServer,
   stopServer,
+  replyToQuestion,
   type SessionEnvironment,
 } from "./client";

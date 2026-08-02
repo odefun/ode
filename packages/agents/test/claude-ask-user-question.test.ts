@@ -1,5 +1,13 @@
 import { describe, expect, it } from "bun:test";
-import { didClaudeDenyAskUserQuestion, extractAskUserQuestionToolUse, replyToQuestion } from "../claude/client";
+import {
+  CLAUDE_SDK_ALLOWED_TOOLS,
+  CLAUDE_SDK_PERMISSION_TOOLS,
+  CLAUDE_SDK_SETTINGS,
+  createClaudeSdkCanUseTool,
+  didClaudeDenyAskUserQuestion,
+  extractAskUserQuestionToolUse,
+  replyToQuestion,
+} from "../claude/client";
 import { createAgentAdapter } from "../adapter";
 
 const ASSISTANT_WITH_ASK = JSON.stringify({
@@ -239,5 +247,84 @@ describe("Claude replyToQuestion guards", () => {
         answers: [["whatever"]],
       })
     ).rejects.toThrow(/No pending Claude question/);
+  });
+});
+
+describe("Claude Agent SDK AskUserQuestion permission routing", () => {
+  it("keeps AskUserQuestion out of auto-allowed tools and forces an ask rule", () => {
+    expect(CLAUDE_SDK_ALLOWED_TOOLS).toEqual([]);
+    expect(CLAUDE_SDK_PERMISSION_TOOLS).toContain("AskUserQuestion");
+    expect(CLAUDE_SDK_SETTINGS.permissions.ask).toContain("AskUserQuestion");
+  });
+
+  it("allows known tools in the callback and fails closed for future tools", async () => {
+    const canUseTool = createClaudeSdkCanUseTool("claude-sdk-tool-policy");
+    const control = {
+      signal: new AbortController().signal,
+      toolUseID: "toolu_policy",
+      requestId: "request_policy",
+    };
+    await expect(canUseTool("Read", { file_path: "/tmp/readme" }, control)).resolves.toEqual({
+      behavior: "allow",
+      updatedInput: { file_path: "/tmp/readme" },
+    });
+    await expect(canUseTool("FutureDangerousTool", {}, control)).resolves.toEqual({
+      behavior: "deny",
+      message: "Ode has not approved the Claude tool FutureDangerousTool.",
+    });
+  });
+
+  it("blocks in canUseTool until Ode supplies the user's answer", async () => {
+    const sessionId = "claude-sdk-question-session";
+    const canUseTool = createClaudeSdkCanUseTool(sessionId);
+    const decisionPromise = canUseTool(
+      "AskUserQuestion",
+      {
+        questions: [{
+          question: "Which database?",
+          header: "Database",
+          multiSelect: false,
+          options: [
+            { label: "PostgreSQL", description: "Use Postgres" },
+            { label: "SQLite", description: "Use SQLite" },
+          ],
+        }],
+      },
+      {
+        signal: new AbortController().signal,
+        toolUseID: "toolu_question",
+        requestId: "request_question",
+      }
+    );
+
+    await Promise.resolve();
+    await replyToQuestion({
+      sessionId,
+      requestId: "request_question",
+      answers: [["PostgreSQL"]],
+    });
+
+    await expect(decisionPromise).resolves.toMatchObject({
+      behavior: "allow",
+      updatedInput: {
+        answers: { "Which database?": "PostgreSQL" },
+      },
+    });
+  });
+
+  it("denies malformed AskUserQuestion calls instead of letting the CLI dialog hang", async () => {
+    const decision = await createClaudeSdkCanUseTool("claude-sdk-malformed-question")(
+      "AskUserQuestion",
+      { questions: [] },
+      {
+        signal: new AbortController().signal,
+        toolUseID: "toolu_empty",
+        requestId: "request_empty",
+      }
+    );
+    expect(decision).toEqual({
+      behavior: "deny",
+      message: "AskUserQuestion contained no valid questions.",
+    });
   });
 });

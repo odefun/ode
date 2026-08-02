@@ -1,20 +1,6 @@
-import { clearActiveRequest, getSessionsWithPendingRequests, type ActiveRequest } from "@/config/local/sessions";
+import { clearActiveRequest, getSessionsWithPendingRequests } from "@/config/local/sessions";
 import type { IMAdapter } from "@/core/types";
 import { log } from "@/utils";
-
-async function stopRecoveredStatusStream(im: IMAdapter, request: ActiveRequest): Promise<void> {
-  if (!request.statusStreamActive || !request.statusStreamTs || !im.stopStatusStream) return;
-
-  try {
-    await im.stopStatusStream(request.channelId, request.statusStreamTs);
-  } catch (err) {
-    log.warn("Failed to stop recovered status stream", {
-      channelId: request.channelId,
-      statusTs: request.statusStreamTs,
-      error: String(err),
-    });
-  }
-}
 
 export async function recoverPendingRequests(
   im: IMAdapter,
@@ -45,8 +31,6 @@ export async function recoverPendingRequests(
     }
 
     const age = Date.now() - request.startedAt;
-    await stopRecoveredStatusStream(im, request);
-
     if (age > 10 * 60 * 1000) {
       log.debug("Clearing stale request", {
         channelId: session.channelId,

@@ -14,18 +14,23 @@ export function markdownToSlack(text: string): string {
   // Convert inline code
   // Slack uses single backticks same as markdown
 
+  // Convert italic: *text* or _text_ -> _text_
+  // Do this before converting bold so the freshly-created Slack `*bold*`
+  // markers are not mistaken for CommonMark italics on the next line.
+  result = result.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, "_$1_");
+
   // Convert bold: **text** -> *text*
   result = result.replace(/\*\*([^*]+)\*\*/g, "*$1*");
-
-  // Convert italic: *text* or _text_ -> _text_
-  // Be careful not to match bold markers
-  result = result.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, "_$1_");
 
   // Convert links: [text](url) -> <url|text>
   result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, "<$2|$1>");
 
   // Convert headers: # text -> *text*
   result = result.replace(/^#{1,6}\s+(.+)$/gm, "*$1*");
+
+  // A leading `>` is Markdown blockquote syntax, not an arbitrary HTML
+  // character. Restore it after the general Slack escaping above.
+  result = result.replace(/^&gt;\s?/gm, "> ");
 
   // Convert strikethrough: ~~text~~ -> ~text~
   result = result.replace(/~~([^~]+)~~/g, "~$1~");

@@ -1,10 +1,16 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import { createOpencodeClient } from "@opencode-ai/sdk/v2";
 import type { OpenCodeMessageContext } from "@/agents";
+import {
+  extractOpenCodeChildSession,
+  normalizeOpenCodeGlobalEvent,
+} from "@/agents/opencode/events";
 import { buildPromptParts, buildSystemPrompt } from "@/agents/shared";
 import { getAgentProvider, type AgentProviderId } from "@/agents/registry";
 import { isAgentProviderId } from "@/shared/agent-provider";
+import { createAgentInput } from "@/shared/agent-protocol";
 import type { OpenCodeMessage, OpenCodeOptions } from "@/agents/types";
 import { extractEventSessionId } from "@/utils";
 import { buildHarnessRunId, HarnessRedisStore } from "../redis-store";
@@ -178,7 +184,7 @@ async function main(): Promise<void> {
   const userId = parseArg("user") || DEFAULT_USER_ID;
   const prompt = await loadPrompt(parseArg("prompt-file"));
   const model = parseModelArg(parseArg("model"));
-  const agent = parseArg("agent") || (provider === "gemini" ? "plan" : undefined);
+  const agent = parseArg("agent");
 
   const runId = parseArg("run-id") || buildHarnessRunId(provider);
   const startedAt = Date.now();
@@ -223,23 +229,35 @@ async function main(): Promise<void> {
       await store.saveRunMeta(runMeta);
 
       let streamClosed = false;
+      const relatedSessionIds = new Set([sessionId]);
+      const childTitles = new Map<string, string>();
       const events = await client.global.event();
       const streamTask = (async () => {
         for await (const globalEvent of events.stream) {
           if (streamClosed) break;
-          const payload = (globalEvent as { payload?: unknown }).payload ?? globalEvent;
-          const payloadRecord = payload && typeof payload === "object"
-            ? payload as Record<string, unknown>
-            : undefined;
+          const normalized = normalizeOpenCodeGlobalEvent(globalEvent, {
+            rootSessionId: sessionId,
+            childTitle: (childSessionId) => childTitles.get(childSessionId),
+          });
+          if (!normalized) continue;
+          const payloadRecord = normalized.payload;
+          const child = extractOpenCodeChildSession(payloadRecord);
+          if (
+            child
+            && (!child.parentSessionId || relatedSessionIds.has(child.parentSessionId))
+          ) {
+            relatedSessionIds.add(child.sessionId);
+            if (child.title) childTitles.set(child.sessionId, child.title);
+          }
           const eventSessionId = extractEventSessionId(payloadRecord);
-          if (eventSessionId && eventSessionId !== sessionId) continue;
+          if (eventSessionId && !relatedSessionIds.has(eventSessionId)) continue;
           const captured: HarnessCapturedEvent = {
             runId,
             sessionId,
             provider,
             timestamp: Date.now(),
             index: eventCount,
-            event: globalEvent,
+            event: normalized,
           };
           eventCount += 1;
           pendingWrites.push(store.appendEvent(captured));
@@ -247,7 +265,19 @@ async function main(): Promise<void> {
       })();
 
       try {
-        const parts = buildPromptParts(channelId, prompt, model ? { model } : undefined, context);
+        const parts = buildPromptParts(
+          channelId,
+          createAgentInput(prompt),
+          model ? { model } : undefined,
+          context
+        ).map((part) => part.type === "text"
+          ? part
+          : {
+              type: "file" as const,
+              mime: part.mimeType,
+              filename: part.filename,
+              url: pathToFileURL(part.path).href,
+            });
         const system = buildSystemPrompt(context.slack);
         const response = await client.session.prompt({
           sessionID: sessionId,
@@ -327,7 +357,7 @@ async function main(): Promise<void> {
       responses = await providerClient.sendMessage(
         channelId,
         session.sessionId,
-        prompt,
+        createAgentInput(prompt),
         cwd,
         options,
         context

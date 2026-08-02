@@ -12,7 +12,9 @@ import {
   type SessionEnvironment as RuntimeSessionEnvironment,
 } from "../runtime/base";
 import { createCliThreadSessionManager } from "../runtime/cli-session";
+import { inspectCliProtocol } from "../runtime/protocol-drift";
 import type {
+  AgentInput,
   OpenCodeMessage,
   OpenCodeMessageContext,
   OpenCodeOptions,
@@ -50,6 +52,14 @@ const NEW_SESSIONS_MAX_ENTRIES = 1000;
 const newSessions = new BoundedSet<string>(NEW_SESSIONS_MAX_ENTRIES);
 const DEFAULT_OPENHANDS_MODEL = "anthropic/claude-sonnet-4-5-20250929";
 const OPENHANDS_EVENT_POLL_MS = 1000;
+const OPENHANDS_RECORD_TYPES = [
+  "start",
+  "progress",
+  "SystemPromptEvent",
+  "ActionEvent",
+  "ObservationEvent",
+  "MessageEvent",
+];
 
 export const { createSession, getOrCreateSession } = createCliThreadSessionManager({
   providerId: "openhands",
@@ -436,6 +446,11 @@ function publishOpenHandsRecord(record: OpenHandsJsonRecord, fallbackSessionId: 
     properties: {
       record,
       recordType: rawType,
+      ...inspectCliProtocol({
+        providerName: "OpenHands",
+        recordType: rawType,
+        knownRecordTypes: OPENHANDS_RECORD_TYPES,
+      }),
     },
   });
 }
@@ -443,7 +458,7 @@ function publishOpenHandsRecord(record: OpenHandsJsonRecord, fallbackSessionId: 
 export async function sendMessage(
   channelId: string,
   sessionId: string,
-  message: string,
+  input: AgentInput,
   workingPath: string,
   options?: OpenCodeOptions,
   context?: OpenCodeMessageContext
@@ -454,7 +469,7 @@ export async function sendMessage(
   try {
     return await runtime.withSessionLock(sessionKey, async () => {
       const agent = options?.agent;
-      const parts = buildPromptParts(channelId, message, { ...options, agent }, context);
+      const parts = buildPromptParts(channelId, input, { ...options, agent }, context);
       const prompt = buildPromptText(parts);
       const openHandsPrompt = buildSystemWrappedPrompt(buildSystemPrompt(context?.slack), prompt);
       const envOverrides = runtime.getSessionEnvironment(sessionId);
@@ -464,13 +479,13 @@ export async function sendMessage(
       publishOpenHandsRecord({
         type: "start",
         model,
-        prompt: message,
+        prompt,
       }, sessionId);
       const progressTimer = setInterval(() => {
         publishOpenHandsRecord({
           type: "progress",
           model,
-          prompt: message,
+          prompt,
           elapsedMs: Date.now() - startedAtMs,
         }, sessionId);
       }, 15_000);

@@ -72,7 +72,7 @@ function makeTask(overrides: Partial<TaskRecord> = {}): TaskRecord {
 function seedSession(
   channelId: string,
   threadId: string,
-  providerId: "opencode" | "claudecode" | "codex" | "kimi" | "kiro" | "kilo" | "qwen" | "goose" | "gemini",
+  providerId: "opencode" | "claudecode" | "codex" | "kimi" | "kilo" | "qwen" | "goose",
 ): void {
   const now = Date.now();
   saveSession(

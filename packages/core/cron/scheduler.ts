@@ -38,6 +38,7 @@ import { buildSessionEnvironment, prepareSessionWorkspace } from "@/core/session
 import { sendChannelMessage as sendDiscordChannelMessage } from "@/ims/discord/client";
 import { sendChannelMessage as sendLarkChannelMessage } from "@/ims/lark/client";
 import { log } from "@/utils";
+import { createAgentInput } from "@/shared/agent-protocol";
 
 const CRON_POLL_INTERVAL_MS = 15_000;
 
@@ -340,7 +341,7 @@ async function runCronJob(job: CronJobRecord, minuteStartMs: number): Promise<vo
       agent.sendMessage(
         job.channelId,
         sessionId,
-        job.messageText,
+        createAgentInput(job.messageText),
         cwd,
         options,
         buildCronAgentContext(job, runId)

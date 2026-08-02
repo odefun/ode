@@ -6,11 +6,9 @@ export type AgentInstallStatus = {
   claudecode: boolean;
   codex: boolean;
   kimi: boolean;
-  kiro: boolean;
   kilo: boolean;
   qwen: boolean;
   goose: boolean;
-  gemini: boolean;
   pi: boolean;
   openhands: boolean;
   codebuddy: boolean;
@@ -207,11 +205,9 @@ export function getInstalledAgentStatus(): AgentInstallStatus {
     claudecode: Boolean(Bun.which("claude")),
     codex: Boolean(Bun.which("codex")),
     kimi: Boolean(Bun.which("kimi")),
-    kiro: Boolean(Bun.which("kiro-cli") || Bun.which("kiro")),
     kilo: Boolean(Bun.which("kilo")),
     qwen: Boolean(Bun.which("qwen") || Bun.which("qwen-code")),
     goose: Boolean(Bun.which("goose")),
-    gemini: Boolean(Bun.which("gemini")),
     pi: Boolean(Bun.which("pi")),
     openhands: Boolean(Bun.which("openhands")),
     codebuddy: Boolean(Bun.which("codebuddy") || Bun.which("cbc")),
@@ -239,10 +235,8 @@ export async function runSingleAgentCheck(provider: AgentProviderId): Promise<Ag
   }
   if (provider === "codex") return { codex: installed.codex };
   if (provider === "kimi") return { kimi: installed.kimi };
-  if (provider === "kiro") return { kiro: installed.kiro };
   if (provider === "qwen") return { qwen: installed.qwen };
   if (provider === "goose") return { goose: installed.goose };
-  if (provider === "gemini") return { gemini: installed.gemini };
 
   if (provider === "opencode") {
     const result: AgentCheckProviderResult = { opencode: installed.opencode, opencodeModels: [] };

@@ -14,6 +14,8 @@ import {
 } from "@/config/local/sessions";
 import type { AgentAdapter, IMAdapter } from "@/core/types";
 import type { RawInboundEvent } from "@/core/model/raw-inbound-event";
+import { renderAgentInputAsText } from "@/shared/agent-protocol";
+import { LEGACY_AGENT_CAPABILITIES } from "@/shared/agent-protocol";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -107,8 +109,11 @@ function createFakeAgent(params?: {
     supportsEventStream: false,
     getProviderForSession: () => "opencode",
     getDisplayNameForSession: () => "FakeAgent",
+    getTransportForSession: () => "cli-json",
+    getCapabilitiesForSession: () => LEGACY_AGENT_CAPABILITIES,
     getOrCreateSession: async () => ({ sessionId: "session-e2e", created: true }),
-    sendMessage: async (_channelId, _sessionId, message) => {
+    sendMessage: async (_channelId, _sessionId, input) => {
+      const message = renderAgentInputAsText(input);
       sentPrompts.push(message);
       await params?.onSend?.(message);
       return params?.responses ?? [{ text: "Hello from fake agent", messageType: "assistant" }];

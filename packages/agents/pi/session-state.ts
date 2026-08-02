@@ -23,6 +23,14 @@ type PiContentBlock = {
 
 export type PiRawRecord = {
   type?: string;
+  id?: string;
+  toolCallId?: string;
+  toolName?: string;
+  args?: Record<string, unknown>;
+  result?: {
+    content?: PiContentBlock[] | string;
+    isError?: boolean;
+  };
   message?: {
     role?: string;
     content?: PiContentBlock[] | string;
@@ -162,6 +170,61 @@ export function applyPiRecordToState(
   if (title) state.sessionTitle = title;
 
   const type = typeof record.type === "string" ? record.type.trim() : "";
+  if (type === "session") {
+    state.phaseStatus = "Started Pi session";
+    return;
+  }
+
+  if (type === "tool_execution_start") {
+    const toolId = typeof record.toolCallId === "string" && record.toolCallId.trim()
+      ? record.toolCallId
+      : `pi-tool-${Date.now()}`;
+    const toolName = typeof record.toolName === "string" && record.toolName.trim()
+      ? record.toolName
+      : "tool";
+    const tool: StreamToolState = {
+      id: toolId,
+      name: toolName,
+      status: "running",
+      input: record.args,
+      title: buildToolTitle(toolName, record.args),
+    };
+    streamState.toolById.set(toolId, tool);
+    updateTool(state, tool);
+    state.phaseStatus = tool.title
+      ? `Running tool: ${toolName} - ${tool.title}`
+      : `Running tool: ${toolName}`;
+    return;
+  }
+
+  if (type === "tool_execution_end") {
+    const toolId = typeof record.toolCallId === "string" ? record.toolCallId.trim() : "";
+    const existing = toolId ? streamState.toolById.get(toolId) : undefined;
+    const toolName = record.toolName || existing?.name || "tool";
+    const isError = record.result?.isError === true;
+    const output = contentToText(record.result?.content, "text");
+    const tool: StreamToolState = {
+      id: toolId || existing?.id || `pi-tool-${Date.now()}`,
+      name: toolName,
+      status: isError ? "error" : "completed",
+      input: existing?.input,
+      output: output || existing?.output,
+      error: isError ? output || "Tool failed" : undefined,
+      title: existing?.title,
+      metadata: existing?.metadata,
+    };
+    streamState.toolById.set(tool.id, tool);
+    updateTool(state, tool);
+    const detail = tool.title ? `${tool.name} - ${tool.title}` : tool.name;
+    state.phaseStatus = `${isError ? "Tool failed" : "Finished tool"}: ${detail}`;
+    return;
+  }
+
+  if (type === "agent_settled") {
+    state.phaseStatus = "Finalizing response";
+    return;
+  }
+
   if (type === "agent_start" || type === "turn_start") {
     state.phaseStatus = "Thinking";
     return;

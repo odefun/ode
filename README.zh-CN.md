@@ -12,7 +12,10 @@ Ode 是一个编程代理工具，可将你的编码Agent（OpenCode、Claude Co
 * 🖇️ **将编码会话与 Slack 线程 1:1 映射**，并结合 worktree 实现隔离开发，轻松并行协作。
 * 👬 频道内任何人都可以直接参与编码，无需额外配置，**一个账号可供团队成员共享使用**。
 * 📝 **消息实时更新**，不再盲等回复，你可以通过实时文本更新持续跟踪进度。
+* 📎 **图片和文件输入**，可直接在 Slack、Discord 或飞书消息中附加截图、文档和源码文件，并以结构化输入传给编码代理。
 * 🐙 **按用户设置git信息**，由谁发起线程，就以谁作为对应提交作者。 (Run @bot /gh)
+
+Ode 会优先使用各代理的结构化接口：Codex App Server、Claude Agent SDK Streaming Input、OpenCode SDK，以及 Kimi、Kilo、Goose 的 ACP。其他代理继续使用各自支持的流式 CLI 格式。编码代理凭据仍由本机 CLI 自己管理，Ode 不保存 API Key。
 
 ## 和OpenClaw的比较
 
@@ -54,11 +57,9 @@ ode
 | CodeBuddy | <img src="https://img.shields.io/badge/CodeBuddy-111111?style=for-the-badge&logo=codebuddy&logoColor=white" alt="CodeBuddy logo" /> | [codebuddy.ai/docs/cli](https://www.codebuddy.ai/docs/cli/overview) |
 | Codex | <img src="https://img.shields.io/badge/Codex-111111?style=for-the-badge&logo=openai&logoColor=white" alt="Codex logo" /> | [github.com/openai/codex](https://github.com/openai/codex) |
 | Crush | <img src="https://img.shields.io/badge/Crush-111111?style=for-the-badge&logo=charm&logoColor=white" alt="Crush logo" /> | [github.com/charmbracelet/crush](https://github.com/charmbracelet/crush) |
-| Gemini CLI | <img src="https://img.shields.io/badge/Gemini_CLI-111111?style=for-the-badge&logo=google&logoColor=white" alt="Gemini CLI logo" /> | [github.com/google-gemini/gemini-cli](https://github.com/google-gemini/gemini-cli) |
 | Goose CLI | <img src="https://img.shields.io/badge/Goose_CLI-111111?style=for-the-badge&logo=go&logoColor=white" alt="Goose CLI logo" /> | [block.github.io/goose](https://block.github.io/goose/) |
 | Kimi Code | <img src="https://img.shields.io/badge/Kimi_Code-111111?style=for-the-badge&logo=moonrepo&logoColor=white" alt="Kimi Code logo" /> | [moonshotai.github.io/kimi-cli](https://moonshotai.github.io/kimi-cli/) |
 | Kilo Code | <img src="https://img.shields.io/badge/Kilo_Code-111111?style=for-the-badge&logo=codeium&logoColor=white" alt="Kilo Code logo" /> | [kilo.ai/docs/code-with-ai/platforms/cli](https://kilo.ai/docs/code-with-ai/platforms/cli) |
-| Kiro CLI | <img src="https://img.shields.io/badge/Kiro_CLI-111111?style=for-the-badge&logo=amazonec2&logoColor=white" alt="Kiro CLI logo" /> | [kiro.dev/docs/cli/reference](https://kiro.dev/docs/cli/reference/cli-commands/) |
 | OpenCode | <img src="https://img.shields.io/badge/OpenCode-111111?style=for-the-badge&logo=opencollective&logoColor=white" alt="OpenCode logo" /> | [opencode.ai](https://opencode.ai/) |
 | OpenHands | <img src="https://img.shields.io/badge/OpenHands-111111?style=for-the-badge&logo=openai&logoColor=white" alt="OpenHands logo" /> | [docs.openhands.dev](https://docs.openhands.dev/) |
 | Pi | <img src="https://img.shields.io/badge/Pi-111111?style=for-the-badge&logo=pi&logoColor=white" alt="Pi logo" /> | [github.com/earendil-works/pi](https://github.com/earendil-works/pi) |
@@ -76,7 +77,7 @@ ode
 
 1. 邀请机器人进入一个频道。
 2. 执行 `@bot /setting`，选择频道设置，选择你的编码 CLI（OpenCode 也可选择模型）以及工作目录。
-3. 使用 `@bot` 并附上你的提示词。
+3. 使用 `@bot` 并附上你的提示词，也可以同时添加图片或文件附件。
 4. 机器人会调用编码代理处理你的消息。
 
 ## Worktree

@@ -89,19 +89,8 @@ export async function handlePendingQuestionReply(params: {
     try {
       const question = pendingQuestion.questions[nextIndex];
       if (question) {
-        const prefix = totalQuestions > 1 ? `(${nextIndex + 1}/${totalQuestions}) ` : "";
-        if (typeof deps.im.sendQuestion === "function") {
-          await deps.im.sendQuestion(
-            context.channelId,
-            context.replyThreadId,
-            question.question,
-            question.options,
-            prefix
-          );
-        } else {
-          const nextPrompt = formatSingleQuestionPrompt(question, nextIndex, totalQuestions);
-          await deps.im.sendMessage(context.channelId, context.replyThreadId, nextPrompt);
-        }
+        const nextPrompt = formatSingleQuestionPrompt(question, nextIndex, totalQuestions);
+        await deps.im.sendMessage(context.channelId, context.replyThreadId, nextPrompt);
       }
     } catch (err) {
       log.warn("Failed to send follow-up question", {

@@ -1,0 +1,156 @@
+{
+  "meta": {
+    "runId": "opencode_child_sync_fixture",
+    "provider": "opencode",
+    "prompt": "fixed",
+    "promptHash": "hash",
+    "cwd": "/tmp/repo",
+    "channelId": "C_TEST",
+    "threadId": "T_TEST",
+    "sessionId": "root-1",
+    "startedAt": 1700000000000,
+    "eventCount": 4
+  },
+  "events": [
+    {
+      "runId": "opencode_child_sync_fixture",
+      "sessionId": "root-1",
+      "provider": "opencode",
+      "timestamp": 1700000000100,
+      "index": 0,
+      "event": {
+        "payload": {
+          "type": "message.part.updated",
+          "properties": {
+            "sessionID": "root-1",
+            "part": {
+              "id": "task-1",
+              "sessionID": "root-1",
+              "type": "tool",
+              "tool": "task",
+              "state": {
+                "status": "running",
+                "title": "Audit repository docs",
+                "time": { "start": 1700000000000 },
+                "metadata": {
+                  "parentSessionId": "root-1",
+                  "sessionId": "child-1"
+                }
+              }
+            },
+            "odeContext": {
+              "rootSessionID": "root-1",
+              "sourceSessionID": "root-1",
+              "childSession": false,
+              "transportType": "event"
+            }
+          }
+        }
+      }
+    },
+    {
+      "runId": "opencode_child_sync_fixture",
+      "sessionId": "root-1",
+      "provider": "opencode",
+      "timestamp": 1700000000200,
+      "index": 1,
+      "event": {
+        "payload": {
+          "type": "message.part.updated",
+          "properties": {
+            "sessionID": "child-1",
+            "part": {
+              "id": "read-1",
+              "sessionID": "child-1",
+              "type": "tool",
+              "tool": "read",
+              "state": {
+                "status": "running",
+                "title": "README.md",
+                "time": { "start": 1700000000200 }
+              }
+            },
+            "odeContext": {
+              "rootSessionID": "root-1",
+              "sourceSessionID": "child-1",
+              "childSession": true,
+              "childTitle": "Audit repository docs",
+              "transportType": "sync",
+              "syncSequence": 1
+            }
+          }
+        }
+      }
+    },
+    {
+      "runId": "opencode_child_sync_fixture",
+      "sessionId": "root-1",
+      "provider": "opencode",
+      "timestamp": 1700000000300,
+      "index": 2,
+      "event": {
+        "payload": {
+          "type": "message.part.updated",
+          "properties": {
+            "sessionID": "child-1",
+            "part": {
+              "id": "read-1",
+              "sessionID": "child-1",
+              "type": "tool",
+              "tool": "read",
+              "state": {
+                "status": "completed",
+                "title": "README.md",
+                "time": { "start": 1700000000200, "end": 1700000000300 }
+              }
+            },
+            "odeContext": {
+              "rootSessionID": "root-1",
+              "sourceSessionID": "child-1",
+              "childSession": true,
+              "childTitle": "Audit repository docs",
+              "transportType": "sync",
+              "syncSequence": 2
+            }
+          }
+        }
+      }
+    },
+    {
+      "runId": "opencode_child_sync_fixture",
+      "sessionId": "root-1",
+      "provider": "opencode",
+      "timestamp": 1700000000400,
+      "index": 3,
+      "event": {
+        "payload": {
+          "type": "message.part.updated",
+          "properties": {
+            "sessionID": "root-1",
+            "part": {
+              "id": "task-1",
+              "sessionID": "root-1",
+              "type": "tool",
+              "tool": "task",
+              "state": {
+                "status": "completed",
+                "title": "Audit repository docs",
+                "time": { "start": 1700000000000, "end": 1700000000400 },
+                "metadata": {
+                  "parentSessionId": "root-1",
+                  "sessionId": "child-1"
+                }
+              }
+            },
+            "odeContext": {
+              "rootSessionID": "root-1",
+              "sourceSessionID": "root-1",
+              "childSession": false,
+              "transportType": "event"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

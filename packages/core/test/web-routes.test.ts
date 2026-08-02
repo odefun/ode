@@ -9,10 +9,12 @@ import {
   clearMessageStoreForTests,
   closeMessageDatabaseForTests,
   ensureMessageThread,
+  recordOdeRunEvents,
   recordUserPrompt,
   startAgentResult,
   completeAgentResult,
 } from "@/config/local/inbox";
+import { createOdeRunEvent } from "@/core/runtime/ode-run-events";
 import { createWebApp } from "@/core/web/app";
 import { collapseTextDeltas } from "@/core/web/session-events";
 import * as fs from "fs";
@@ -90,6 +92,19 @@ describe("web app routing", () => {
       detailId: agentDetail.id,
       resultText: "All builds green.",
     });
+    recordOdeRunEvents(threadKey, [
+      createOdeRunEvent(
+        { providerId: "opencode", sessionId: "session-web", runId: "run-web", timestamp: 10 },
+        "run.progress",
+        { phase: "Reading tests" },
+      ),
+      createOdeRunEvent(
+        { providerId: "opencode", sessionId: "session-web", runId: "run-web", timestamp: 11 },
+        "provider.raw",
+        { providerType: "message.part.updated" },
+        { rawEvent: { type: "message.part.updated" } },
+      ),
+    ]);
 
     const app = createWebApp();
     const listResponse = await app.handle(new Request("http://localhost/api/message-threads?page=1&pageSize=5"));
@@ -122,6 +137,20 @@ describe("web app routing", () => {
     const agentResult = detailPayload.result?.details.find((d) => d.kind === "agent_result");
     expect(userPrompt?.promptText).toBe("show me the latest build failures");
     expect(agentResult?.resultText).toBe("All builds green.");
+
+    const eventsResponse = await app.handle(new Request(
+      `http://localhost/api/message-threads/${encodeURIComponent(threadKey)}/events?limit=20`
+    ));
+    expect(eventsResponse.status).toBe(200);
+    const eventsPayload = await eventsResponse.json() as {
+      ok: boolean;
+      result?: { total: number; items: Array<{ type: string; data: Record<string, unknown> }> };
+    };
+    expect(eventsPayload.ok).toBe(true);
+    expect(eventsPayload.result?.total).toBe(1);
+    expect(eventsPayload.result?.items).toEqual([
+      expect.objectContaining({ type: "run.progress", data: { phase: "Reading tests" } }),
+    ]);
   });
 
   it("returns cron job list payload", async () => {

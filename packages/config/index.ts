@@ -30,7 +30,6 @@ export {
   getSlackAppTokens,
   getSlackBotTokens,
   getSlackTargetChannels,
-  getSlackStatusModeForChannel,
   getDiscordBotTokens,
   getDiscordTargetChannels,
   getLarkAppCredentials,

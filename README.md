@@ -12,7 +12,10 @@ Ode is a agent tool that bridges your coding agents (OpenCode, Claude Code, Code
 * 🖇️ **Map coding sessions 1 - 1 to chat threads**, and use worktree to get isolated, parallel coding is so easy.
 * 👬 Anyone in the channel can join coding without any extra setup, **pay one account for all team members**.
 * 📝 **Message live message updates**, you don't wait for response without any information, you can monitor from real-time text updates.
+* 📎 **Image and file input**, attach screenshots, documents, or source files in Slack, Discord, or Lark and Ode forwards structured content to the coding agent.
 * 🐙 **Per user git config**, who start the thread becomes corresponding git commit author. (Run @bot /setting)
+
+Ode prefers each agent's structured integration surface: Codex App Server, Claude Agent SDK streaming input, OpenCode SDK, and ACP for Kimi, Kilo, and Goose. Other agents continue to use their supported streaming CLI format. Agent credentials remain owned by the local CLI; Ode does not store API keys.
 
 ## Compare with OpenClaw
 
@@ -56,11 +59,9 @@ Settings UI can be accessible via http://127.0.0.1:9293 or use `/setting` comman
 | CodeBuddy | <img src="https://img.shields.io/badge/CodeBuddy-111111?style=for-the-badge&logo=codebuddy&logoColor=white" alt="CodeBuddy logo" /> | [codebuddy.ai/docs/cli](https://www.codebuddy.ai/docs/cli/overview) |
 | Codex | <img src="https://img.shields.io/badge/Codex-111111?style=for-the-badge&logo=openai&logoColor=white" alt="Codex logo" /> | [github.com/openai/codex](https://github.com/openai/codex) |
 | Crush | <img src="https://img.shields.io/badge/Crush-111111?style=for-the-badge&logo=charm&logoColor=white" alt="Crush logo" /> | [github.com/charmbracelet/crush](https://github.com/charmbracelet/crush) |
-| Gemini CLI | <img src="https://img.shields.io/badge/Gemini_CLI-111111?style=for-the-badge&logo=google&logoColor=white" alt="Gemini CLI logo" /> | [github.com/google-gemini/gemini-cli](https://github.com/google-gemini/gemini-cli) |
 | Goose CLI | <img src="https://img.shields.io/badge/Goose_CLI-111111?style=for-the-badge&logo=go&logoColor=white" alt="Goose CLI logo" /> | [block.github.io/goose](https://block.github.io/goose/) |
 | Kimi Code | <img src="https://img.shields.io/badge/Kimi_Code-111111?style=for-the-badge&logo=moonrepo&logoColor=white" alt="Kimi Code logo" /> | [moonshotai.github.io/kimi-cli](https://moonshotai.github.io/kimi-cli/) |
 | Kilo Code | <img src="https://img.shields.io/badge/Kilo_Code-111111?style=for-the-badge&logo=codeium&logoColor=white" alt="Kilo Code logo" /> | [kilo.ai/docs/code-with-ai/platforms/cli](https://kilo.ai/docs/code-with-ai/platforms/cli) |
-| Kiro CLI | <img src="https://img.shields.io/badge/Kiro_CLI-111111?style=for-the-badge&logo=amazonec2&logoColor=white" alt="Kiro CLI logo" /> | [kiro.dev/docs/cli/reference](https://kiro.dev/docs/cli/reference/cli-commands/) |
 | OpenCode | <img src="https://img.shields.io/badge/OpenCode-111111?style=for-the-badge&logo=opencollective&logoColor=white" alt="OpenCode logo" /> | [opencode.ai](https://opencode.ai/) |
 | OpenHands | <img src="https://img.shields.io/badge/OpenHands-111111?style=for-the-badge&logo=openai&logoColor=white" alt="OpenHands logo" /> | [docs.openhands.dev](https://docs.openhands.dev/) |
 | Pi | <img src="https://img.shields.io/badge/Pi-111111?style=for-the-badge&logo=pi&logoColor=white" alt="Pi logo" /> | [github.com/earendil-works/pi](https://github.com/earendil-works/pi) |
@@ -78,8 +79,8 @@ Settings UI can be accessible via http://127.0.0.1:9293 or use `/setting` comman
 
 1. Invite the bot to a channel.
 2. Run `@bot /setting`, select channel setting, choose your coding cli (opencode also can choose model) and working directory.
-3. @ your bot with the prompt you want.
-3. The bot will process your message with the coding agent.
+3. @ your bot with the prompt you want, optionally with image or file attachments.
+4. The bot will process your message with the coding agent.
 
 ## Worktrees
 

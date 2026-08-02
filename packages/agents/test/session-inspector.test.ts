@@ -3,6 +3,50 @@ import { buildSessionMessageState } from "../../utils/session-inspector";
 import { buildLiveStatusMessage } from "../../utils/status";
 
 describe("session inspector", () => {
+  it("hydrates child-session tool metadata from normalized OpenCode events", () => {
+    const startedAt = Date.now() - 40_000;
+    const state = buildSessionMessageState([{
+      timestamp: startedAt,
+      type: "message.part.updated",
+      data: {
+        type: "message.part.updated",
+        odeContext: {
+          rootSessionID: "root-1",
+          sourceSessionID: "child-1",
+          childSession: true,
+          childTitle: "Audit docs",
+        },
+        properties: {
+          sessionID: "child-1",
+          odeContext: {
+            rootSessionID: "root-1",
+            sourceSessionID: "child-1",
+            childSession: true,
+            childTitle: "Audit docs",
+          },
+          part: {
+            id: "tool-child",
+            sessionID: "child-1",
+            type: "tool",
+            tool: "read",
+            state: {
+              status: "running",
+              title: "README.md",
+              time: { start: startedAt },
+            },
+          },
+        },
+      },
+    }], { provider: "opencode" });
+
+    expect(state.tools[0]?.metadata).toMatchObject({
+      startedAtMs: startedAt,
+      sourceSessionId: "child-1",
+      childSession: true,
+      childTitle: "Audit docs",
+    });
+  });
+
   it("parses wrapped OpenCode payload events", () => {
     const now = Date.now();
     const state = buildSessionMessageState([
@@ -261,6 +305,20 @@ describe("session inspector", () => {
     expect(state.sessionTitle).toBeUndefined();
   });
 
+  it("does not expose injected Ode system context as the session title", () => {
+    const state = buildSessionMessageState([{
+      timestamp: Date.now(),
+      type: "session.updated",
+      data: {
+        properties: {
+          title: "<system-prompt>\nODE RUNTIME CONTEXT:\n- Platform: slack",
+        },
+      },
+    }], { provider: "codebuddy" });
+
+    expect(state.sessionTitle).toBeUndefined();
+  });
+
   it("prefers summarized title over sibling slug", () => {
     const startedAt = Date.now();
     const state = buildSessionMessageState([
@@ -481,6 +539,52 @@ describe("session inspector", () => {
     expect(state.tokenUsage?.output).toBe(30);
     expect(state.tokenUsage?.cacheRead).toBe(70);
     expect(state.tokenUsage?.total).toBe(300);
+  });
+
+  it("keeps Claude cumulative token usage monotonic across nested progress records", () => {
+    const startedAt = Date.now();
+    const state = buildSessionMessageState([
+      {
+        timestamp: startedAt,
+        type: "claude.raw.assistant",
+        data: {
+          payload: {
+            type: "claude.raw.assistant",
+            properties: {
+              record: {
+                type: "assistant",
+                usage: {
+                  input_tokens: 20_000,
+                  output_tokens: 3_000,
+                },
+              },
+            },
+          },
+        },
+      },
+      {
+        timestamp: startedAt + 1,
+        type: "claude.raw.tool_progress",
+        data: {
+          payload: {
+            type: "claude.raw.tool_progress",
+            properties: {
+              record: {
+                type: "tool_progress",
+                usage: {
+                  input_tokens: 1_000,
+                  output_tokens: 200,
+                },
+              },
+            },
+          },
+        },
+      },
+    ], { provider: "claudecode" });
+
+    expect(state.tokenUsage?.input).toBe(20_000);
+    expect(state.tokenUsage?.output).toBe(3_000);
+    expect(state.tokenUsage?.total).toBe(23_000);
   });
 
   it("hydrates OpenCode model when info.model is an object", () => {
@@ -756,5 +860,23 @@ describe("session inspector", () => {
     ]);
 
     expect(state.currentText).toBe("Here is the summary of changes");
+  });
+
+  it("keeps unknown provider protocol events visible in live status", () => {
+    const state = buildSessionMessageState([{
+      timestamp: Date.now(),
+      type: "qwen.raw.stream_event",
+      data: {
+        properties: {
+          record: { type: "stream_event", event: { type: "future_event" } },
+          recordType: "stream_event",
+          streamEventType: "future_event",
+          protocolKnown: false,
+          protocolLabel: "Qwen stream future_event",
+        },
+      },
+    }], { provider: "qwen" });
+
+    expect(state.phaseStatus).toBe("Qwen Code integration update required: Qwen stream future_event");
   });
 });

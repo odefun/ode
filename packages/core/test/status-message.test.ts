@@ -82,7 +82,7 @@ describe("buildStatusMessageForAgent", () => {
     });
 
     expect(text).toContain("*OpenCode is running...*");
-    expect(text).toContain("_Thinking_");
+    expect(text).toContain("*Thinking*");
   });
 
   it("keeps title visible when model and agent are present", () => {

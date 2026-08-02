@@ -7,4 +7,5 @@ export type InboundIgnoreReason =
 export type InboundDecision =
   | { kind: "ignore"; reason: InboundIgnoreReason }
   | { kind: "stop" }
-  | { kind: "message"; text: string };
+  | { kind: "message"; text: string; input: AgentInput };
+import type { AgentInput } from "@/shared/agent-protocol";

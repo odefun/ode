@@ -1,0 +1,189 @@
+{
+  "meta": {
+    "runId": "codex_app_subagent_fixture",
+    "provider": "codex",
+    "prompt": "fixed",
+    "promptHash": "hash",
+    "cwd": "/tmp/repo",
+    "channelId": "C_TEST",
+    "threadId": "T_TEST",
+    "sessionId": "ode-session",
+    "startedAt": 1700000000000,
+    "eventCount": 7
+  },
+  "events": [
+    {
+      "runId": "codex_app_subagent_fixture",
+      "sessionId": "ode-session",
+      "provider": "codex",
+      "timestamp": 1700000000000,
+      "index": 0,
+      "event": {
+        "type": "message.part.updated",
+        "properties": {
+          "part": {
+            "id": "root_commentary",
+            "sessionID": "ode-session",
+            "type": "text",
+            "text": "Delegating now."
+          }
+        }
+      }
+    },
+    {
+      "runId": "codex_app_subagent_fixture",
+      "sessionId": "ode-session",
+      "provider": "codex",
+      "timestamp": 1700000001000,
+      "index": 1,
+      "event": {
+        "type": "codex.app.item.completed",
+        "properties": {
+          "notification": {
+            "method": "item/completed",
+            "params": {
+              "threadId": "thread_root",
+              "item": {
+                "type": "subAgentActivity",
+                "kind": "started",
+                "agentThreadId": "thread_child",
+                "agentPath": "/root/package_identity"
+              }
+            }
+          },
+          "odeContext": {
+            "rootThreadId": "thread_root",
+            "sourceThreadId": "thread_root",
+            "childThread": false
+          }
+        }
+      }
+    },
+    {
+      "runId": "codex_app_subagent_fixture",
+      "sessionId": "ode-session",
+      "provider": "codex",
+      "timestamp": 1700000001001,
+      "index": 2,
+      "event": {
+        "type": "message.part.updated",
+        "properties": {
+          "part": {
+            "id": "codex-subagent:thread_child",
+            "sessionID": "ode-session",
+            "type": "tool",
+            "tool": "subagent",
+            "state": {
+              "status": "running",
+              "title": "package_identity",
+              "input": { "description": "package_identity" },
+              "metadata": {
+                "provider": "codex",
+                "sourceThreadId": "thread_child",
+                "childSession": true,
+                "startedAtMs": 1700000001000
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "runId": "codex_app_subagent_fixture",
+      "sessionId": "ode-session",
+      "provider": "codex",
+      "timestamp": 1700000002000,
+      "index": 3,
+      "event": {
+        "type": "codex.app.item.agentMessage.delta",
+        "properties": {
+          "notification": {
+            "method": "item/agentMessage/delta",
+            "params": {
+              "threadId": "thread_child",
+              "turnId": "turn_child",
+              "itemId": "child_msg",
+              "delta": "ode 0.2.0"
+            }
+          },
+          "odeContext": {
+            "rootThreadId": "thread_root",
+            "sourceThreadId": "thread_child",
+            "childThread": true
+          }
+        }
+      }
+    },
+    {
+      "runId": "codex_app_subagent_fixture",
+      "sessionId": "ode-session",
+      "provider": "codex",
+      "timestamp": 1700000003000,
+      "index": 4,
+      "event": {
+        "type": "codex.app.turn.completed",
+        "properties": {
+          "notification": {
+            "method": "turn/completed",
+            "params": {
+              "threadId": "thread_child",
+              "turn": { "id": "turn_child", "status": "completed" }
+            }
+          },
+          "odeContext": {
+            "rootThreadId": "thread_root",
+            "sourceThreadId": "thread_child",
+            "childThread": true
+          }
+        }
+      }
+    },
+    {
+      "runId": "codex_app_subagent_fixture",
+      "sessionId": "ode-session",
+      "provider": "codex",
+      "timestamp": 1700000003001,
+      "index": 5,
+      "event": {
+        "type": "message.part.updated",
+        "properties": {
+          "part": {
+            "id": "codex-subagent:thread_child",
+            "sessionID": "ode-session",
+            "type": "tool",
+            "tool": "subagent",
+            "state": {
+              "status": "completed",
+              "title": "package_identity",
+              "input": { "description": "package_identity" },
+              "metadata": {
+                "provider": "codex",
+                "sourceThreadId": "thread_child",
+                "childSession": true,
+                "startedAtMs": 1700000001000
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "runId": "codex_app_subagent_fixture",
+      "sessionId": "ode-session",
+      "provider": "codex",
+      "timestamp": 1700000004000,
+      "index": 6,
+      "event": {
+        "type": "message.part.updated",
+        "properties": {
+          "part": {
+            "id": "root_final",
+            "sessionID": "ode-session",
+            "type": "text",
+            "text": "The package is ode, version 0.2.0."
+          }
+        }
+      }
+    }
+  ]
+}

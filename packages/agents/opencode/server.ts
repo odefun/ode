@@ -4,8 +4,16 @@ import {
   type EventPermissionAsked,
 } from "@opencode-ai/sdk/v2";
 import { spawn, type ChildProcess } from "child_process";
-import { extractEventSessionId, log } from "@/utils";
+import { BoundedSet, extractEventSessionId, log } from "@/utils";
 import { getOpenCodeModels, setOpenCodeModels } from "@/config";
+import {
+  extractOpenCodeChildSession,
+  getOpenCodeEventFingerprint,
+  isMeaningfulOpenCodeEvent,
+  normalizeOpenCodeGlobalEvent,
+  normalizeOpenCodePermissionQuestion,
+  parseOpenCodePermissionReply,
+} from "./events";
 
 // Per-session OpenCode instances
 export type SessionEnvironment = Record<string, string>;
@@ -14,11 +22,23 @@ interface SessionInstance {
   client: OpencodeClient;
   handlers: Set<EventHandler>;
   lastActive: number;
+  lastMeaningfulEventAt: number;
   eventLoopRunning: boolean;
+  rootSessionId: string;
   validSessionIds: Set<string>; // Sessions created in this instance
+  childTitles: Map<string, string>;
+  awaitingInteractionSessionIds: Set<string>;
+  seenEventFingerprints: BoundedSet<string>;
   env: SessionEnvironment;
   baseUrl: string;
 }
+
+export type OpenCodeSessionRuntimeSnapshot = {
+  rootSessionId: string;
+  relatedSessionIds: string[];
+  lastMeaningfulEventAt: number;
+  awaitingInteraction: boolean;
+};
 
 class OpenCodeServerRuntimeState {
   readonly sessionInstances = new Map<string, SessionInstance>();
@@ -32,6 +52,15 @@ class OpenCodeServerRuntimeState {
 }
 
 const runtimeState = new OpenCodeServerRuntimeState();
+
+type PendingOpenCodePermission = {
+  session: SessionInstance;
+  subscriptionSessionId: string;
+  interactionSessionId: string;
+  directory?: string;
+};
+
+const pendingOpenCodePermissions = new Map<string, PendingOpenCodePermission>();
 
 const LISTENING_URL_REGEX = /opencode server listening on\s+(https?:\/\/\S+)/i;
 
@@ -240,7 +269,10 @@ function ensureCleanupInterval(): void {
   runtimeState.cleanupInterval = setInterval(() => {
     const now = Date.now();
     for (const [sessionId, session] of runtimeState.sessionInstances) {
-      if (now - session.lastActive > INACTIVE_TIMEOUT_MS) {
+      if (
+        session.awaitingInteractionSessionIds.size === 0
+        && now - session.lastActive > INACTIVE_TIMEOUT_MS
+      ) {
         log.debug("Cleaning up inactive session", { sessionId });
         stopSessionInstance(sessionId);
       }
@@ -282,8 +314,13 @@ async function getOrCreateSessionInstance(
         client,
         handlers: new Set(),
         lastActive: Date.now(),
+        lastMeaningfulEventAt: Date.now(),
         eventLoopRunning: false,
+        rootSessionId: sessionId,
         validSessionIds: new Set(),
+        childTitles: new Map(),
+        awaitingInteractionSessionIds: new Set(),
+        seenEventFingerprints: new BoundedSet(5_000),
         env,
         baseUrl,
       };
@@ -314,6 +351,9 @@ function stopSessionInstance(sessionId: string): void {
 
   session.eventLoopRunning = false;
   session.handlers.clear();
+  for (const [requestId, pending] of pendingOpenCodePermissions) {
+    if (pending.session === session) pendingOpenCodePermissions.delete(requestId);
+  }
   runtimeState.sessionInstances.delete(sessionId);
   log.debug("Stopped OpenCode session state", { sessionId });
 }
@@ -331,46 +371,86 @@ function startSessionEventLoop(sessionId: string, session: SessionInstance): voi
       for await (const globalEvent of events.stream) {
         if (!session.eventLoopRunning) break;
 
-        const event = (globalEvent as any).payload ?? globalEvent;
-        const directory = (globalEvent as any).directory;
+        const normalizedGlobalEvent = normalizeOpenCodeGlobalEvent(globalEvent, {
+          rootSessionId: session.rootSessionId,
+          childTitle: (childSessionId) => session.childTitles.get(childSessionId),
+        });
+        if (!normalizedGlobalEvent) continue;
+        const event = normalizedGlobalEvent.payload;
+        const directory = normalizedGlobalEvent.directory;
+
+        const child = extractOpenCodeChildSession(event);
+        if (
+          child
+          && (!child.parentSessionId || session.validSessionIds.has(child.parentSessionId))
+        ) {
+          session.validSessionIds.add(child.sessionId);
+          if (child.title) session.childTitles.set(child.sessionId, child.title);
+        }
+
         const eventSessionId = extractEventSessionId(event as Record<string, unknown> | undefined);
         if (eventSessionId && !session.validSessionIds.has(eventSessionId)) {
           continue;
         }
+        if (!eventSessionId && !isMeaningfulOpenCodeEvent(event)) {
+          continue;
+        }
+
+        const fingerprint = getOpenCodeEventFingerprint(event);
+        if (fingerprint && session.seenEventFingerprints.has(fingerprint)) {
+          continue;
+        }
+        if (fingerprint) session.seenEventFingerprints.add(fingerprint);
 
         session.lastActive = Date.now();
+        if (isMeaningfulOpenCodeEvent(event)) {
+          session.lastMeaningfulEventAt = session.lastActive;
+        }
 
-        // Handle permissions
-        if (event.type === "permission.asked") {
-          const permEvent = event as EventPermissionAsked;
-          const requestId = permEvent.properties?.id;
-          if (requestId) {
-            log.debug("Auto-approving permission", { sessionId, requestId });
-            try {
-              await session.client.permission.reply({
-                requestID: requestId,
-                reply: "always",
-                directory,
-              });
-            } catch (err) {
-              log.warn("Failed to approve permission", {
-                sessionId,
-                requestId,
-                error: String(err),
-              });
+        const interactionSessionId = eventSessionId ?? session.rootSessionId;
+        if (event.type === "question.asked") {
+          session.awaitingInteractionSessionIds.add(interactionSessionId);
+        } else if (
+          event.type === "question.replied"
+          || event.type === "question.rejected"
+          || event.type === "permission.replied"
+        ) {
+          session.awaitingInteractionSessionIds.delete(interactionSessionId);
+          if (event.type === "permission.replied") {
+            const properties = event.properties as { requestID?: unknown } | undefined;
+            if (typeof properties?.requestID === "string") {
+              pendingOpenCodePermissions.delete(properties.requestID);
             }
           }
         }
 
-        // Dispatch to all handlers for this session
-        for (const handler of session.handlers) {
-          try {
-            handler(globalEvent);
-          } catch (err) {
-            log.debug("Session event handler error", {
-              sessionId,
-              error: String(err),
+        const eventsToDispatch = [normalizedGlobalEvent];
+        if (event.type === "permission.asked") {
+          const permEvent = event as EventPermissionAsked;
+          const requestId = permEvent.properties?.id;
+          const permissionQuestion = normalizeOpenCodePermissionQuestion(event);
+          if (requestId && permissionQuestion) {
+            pendingOpenCodePermissions.set(requestId, {
+              session,
+              subscriptionSessionId: sessionId,
+              interactionSessionId,
+              directory,
             });
+            session.awaitingInteractionSessionIds.add(interactionSessionId);
+            eventsToDispatch.push({ directory, payload: permissionQuestion });
+          }
+        }
+
+        for (const eventToDispatch of eventsToDispatch) {
+          for (const handler of session.handlers) {
+            try {
+              handler(eventToDispatch);
+            } catch (err) {
+              log.debug("Session event handler error", {
+                sessionId,
+                error: String(err),
+              });
+            }
           }
         }
       }
@@ -402,8 +482,13 @@ export async function createSessionInstance(envOverrides?: SessionEnvironment): 
         client: getClientForBaseUrl(normalizedBaseUrl),
         handlers: new Set(),
         lastActive: Date.now(),
+        lastMeaningfulEventAt: Date.now(),
         eventLoopRunning: false,
+        rootSessionId: sessionId,
         validSessionIds: new Set([sessionId]), // This session is valid in this instance
+        childTitles: new Map(),
+        awaitingInteractionSessionIds: new Set(),
+        seenEventFingerprints: new BoundedSet(5_000),
         env: normalizedEnv,
         baseUrl: normalizedBaseUrl,
       };
@@ -424,6 +509,32 @@ export async function getSessionClient(sessionId: string): Promise<OpencodeClien
   return session.client;
 }
 
+export async function replyToOpenCodePermission(params: {
+  sessionId: string;
+  requestId: string;
+  answers: Array<Array<string>>;
+}): Promise<boolean> {
+  const pending = pendingOpenCodePermissions.get(params.requestId);
+  if (!pending) return false;
+  const validSession = params.sessionId === pending.subscriptionSessionId
+    || params.sessionId === pending.interactionSessionId
+    || pending.session.validSessionIds.has(params.sessionId);
+  if (!validSession) {
+    throw new Error(`OpenCode permission request does not belong to session: ${params.sessionId}`);
+  }
+  const response = await pending.session.client.permission.reply({
+    requestID: params.requestId,
+    reply: parseOpenCodePermissionReply(params.answers),
+    directory: pending.directory,
+  });
+  if (response.error) {
+    throw new Error(`OpenCode permission reply error: ${response.error}`);
+  }
+  pendingOpenCodePermissions.delete(params.requestId);
+  pending.session.awaitingInteractionSessionIds.delete(pending.interactionSessionId);
+  return true;
+}
+
 export function getSessionEnvironment(sessionId: string): SessionEnvironment | null {
   return runtimeState.sessionEnvironments.get(sessionId) ?? null;
 }
@@ -431,6 +542,19 @@ export function getSessionEnvironment(sessionId: string): SessionEnvironment | n
 export function getSessionServerUrl(sessionId: string): string | null {
   const session = runtimeState.sessionInstances.get(sessionId);
   return session?.baseUrl ?? null;
+}
+
+export function getSessionRuntimeSnapshot(
+  sessionId: string
+): OpenCodeSessionRuntimeSnapshot | null {
+  const session = runtimeState.sessionInstances.get(sessionId);
+  if (!session) return null;
+  return {
+    rootSessionId: session.rootSessionId,
+    relatedSessionIds: [...session.validSessionIds],
+    lastMeaningfulEventAt: session.lastMeaningfulEventAt,
+    awaitingInteraction: session.awaitingInteractionSessionIds.size > 0,
+  };
 }
 
 // Subscribe to events for a session (sync if instance exists, else queues)
@@ -494,6 +618,8 @@ export async function ensureValidSession(
 
   const newSessionId = result.data.id;
   session.validSessionIds.add(newSessionId);
+  session.rootSessionId = newSessionId;
+  session.lastMeaningfulEventAt = Date.now();
 
   // Update the instance mapping to use the new sessionId
   runtimeState.sessionInstances.delete(sessionId);

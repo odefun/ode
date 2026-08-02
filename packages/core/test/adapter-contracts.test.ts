@@ -1,12 +1,15 @@
 import type { AgentAdapter, IMAdapter } from "@/core/types";
 import { runAgentAdapterContractSuite } from "./contracts/agent-adapter-contract";
 import { runImAdapterContractSuite } from "./contracts/im-adapter-contract";
+import { LEGACY_AGENT_CAPABILITIES } from "@/shared/agent-protocol";
 
 function makeFakeAgentAdapter(): AgentAdapter {
   return {
     supportsEventStream: false,
     getProviderForSession: () => "opencode",
     getDisplayNameForSession: () => "OpenCode",
+    getTransportForSession: () => "cli-json",
+    getCapabilitiesForSession: () => LEGACY_AGENT_CAPABILITIES,
     getOrCreateSession: async () => ({ sessionId: "s1", created: true }),
     sendMessage: async () => [{ text: "ok", messageType: "assistant" }],
     abortSession: async () => {},

@@ -10,7 +10,17 @@ import {
   type SessionEnvironment as RuntimeSessionEnvironment,
 } from "../runtime/base";
 import { createCliThreadSessionManager } from "../runtime/cli-session";
+import {
+  query as queryClaude,
+  type CanUseTool,
+  type PermissionResult,
+  type Query,
+  type SDKMessage,
+  type SDKUserMessage,
+  type Settings,
+} from "@anthropic-ai/claude-agent-sdk";
 import type {
+  AgentInput,
   OpenCodeMessage,
   OpenCodeMessageContext,
   OpenCodeOptions,
@@ -42,6 +52,7 @@ type PendingClaudeQuestion = {
   deferred: Deferred<{ status: "answered"; answers: string[] } | { status: "cancelled"; reason?: string }>;
 };
 const pendingQuestions = new Map<string, PendingClaudeQuestion>();
+const activeSdkQueries = new Map<string, Query>();
 /**
  * FIFO-bounded cache of session ids that have not yet completed their first
  * turn. Evicting the oldest entry on overflow is safe: the flag only gates
@@ -50,10 +61,12 @@ const pendingQuestions = new Map<string, PendingClaudeQuestion>();
  */
 const NEW_SESSIONS_MAX_ENTRIES = 1000;
 const newSessions = new BoundedSet<string>(NEW_SESSIONS_MAX_ENTRIES);
+const unknownClaudeProtocolLabels = new BoundedSet<string>(200);
 const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type ClaudeJsonRecord = {
   type?: string;
+  subtype?: string;
   event?: {
     type?: string;
     index?: number;
@@ -69,6 +82,64 @@ type ClaudeJsonRecord = {
   session_id?: string;
   permission_denials?: Array<{ tool_name?: string }>;
 };
+
+const KNOWN_CLAUDE_RECORD_TYPES = new Set([
+  "assistant",
+  "user",
+  "result",
+  "stream_event",
+  "system",
+  "auth_status",
+  "conversation_reset",
+  "prompt_suggestion",
+  "rate_limit_event",
+  "tool_progress",
+  "tool_use_summary",
+  "control_response",
+  "keep_alive",
+  "local",
+]);
+
+const KNOWN_CLAUDE_SYSTEM_SUBTYPES = new Set([
+  "init",
+  "api_retry",
+  "background_tasks_changed",
+  "commands_changed",
+  "compact_boundary",
+  "control_request_progress",
+  "elicitation_complete",
+  "files_persisted",
+  "hook_progress",
+  "hook_response",
+  "hook_started",
+  "informational",
+  "local_command_output",
+  "memory_recall",
+  "mirror_error",
+  "model_refusal_fallback",
+  "model_refusal_no_fallback",
+  "notification",
+  "permission_denied",
+  "plugin_install",
+  "session_state_changed",
+  "status",
+  "task_notification",
+  "task_progress",
+  "task_started",
+  "task_updated",
+  "thinking_tokens",
+  "worker_shutting_down",
+]);
+
+export function getUnknownClaudeProtocolLabel(record: ClaudeJsonRecord): string | undefined {
+  const type = typeof record.type === "string" && record.type.trim() ? record.type.trim() : "unknown";
+  if (!KNOWN_CLAUDE_RECORD_TYPES.has(type)) return `type:${type}`;
+  if (type !== "system") return undefined;
+  const subtype = typeof record.subtype === "string" && record.subtype.trim()
+    ? record.subtype.trim()
+    : "unknown";
+  return KNOWN_CLAUDE_SYSTEM_SUBTYPES.has(subtype) ? undefined : `system:${subtype}`;
+}
 
 function deriveSessionTitleFromPrompt(message: string): string | undefined {
   const normalized = message.replace(/\s+/g, " ").trim();
@@ -241,6 +312,11 @@ function publishClaudeRecordAsSessionEvents(
   const rawType = typeof record.type === "string" && record.type.trim()
     ? record.type.trim()
     : "unknown";
+  const unknownProtocolLabel = getUnknownClaudeProtocolLabel(record);
+  if (unknownProtocolLabel && !unknownClaudeProtocolLabels.has(unknownProtocolLabel)) {
+    unknownClaudeProtocolLabels.add(unknownProtocolLabel);
+    log.warn("Unknown Claude Agent SDK message", { label: unknownProtocolLabel });
+  }
   runtime.publishSessionEvent(subscriptionSessionId, {
     type: `claude.raw.${rawType}`,
     properties: {
@@ -248,6 +324,7 @@ function publishClaudeRecordAsSessionEvents(
       recordType: rawType,
       recordSessionId,
       streamEventType: typeof record.event?.type === "string" ? record.event.type : undefined,
+      protocolKnown: !unknownProtocolLabel,
     },
   });
 }
@@ -522,10 +599,10 @@ async function runClaudeWithFallback(
   throw lastError ?? new Error("Claude CLI failed");
 }
 
-export async function sendMessage(
+async function sendMessageViaCli(
   channelId: string,
   sessionId: string,
-  message: string,
+  input: AgentInput,
   workingPath: string,
   options?: OpenCodeOptions,
   context?: OpenCodeMessageContext
@@ -552,7 +629,7 @@ export async function sendMessage(
       const agent = options?.agent;
       const forcedPermissionMode = resolveClaudePermissionMode(agent);
 
-      const parts = buildPromptParts(channelId, message, { ...options, agent }, context);
+      const parts = buildPromptParts(channelId, input, { ...options, agent }, context);
       const initialPrompt = buildPromptText(parts);
       const systemPrompt = buildSystemPrompt(context?.slack);
 
@@ -564,7 +641,7 @@ export async function sendMessage(
       let prompt = initialPrompt;
 
       if (isNewSession) {
-        const fallbackTitle = deriveSessionTitleFromPrompt(message);
+        const fallbackTitle = deriveSessionTitleFromPrompt(initialPrompt);
         if (fallbackTitle) {
           runtime.publishSessionEvent(subscriptionSessionId, {
             type: "session.updated",
@@ -738,6 +815,224 @@ export async function sendMessage(
   }
 }
 
+export const CLAUDE_SDK_PERMISSION_TOOLS = [
+  "Bash", "Glob", "Grep", "Read", "Edit", "Write", "WebFetch", "Task",
+  "TodoWrite", "NotebookEdit", "TaskOutput", "TaskStop", "ToolSearch", "Skill",
+  "AskUserQuestion",
+];
+
+// Keep the SDK's auto-allow layer empty. Every tool is routed through
+// canUseTool, where Ode can distinguish immediate allowlist decisions from
+// blocking user questions and can fail closed for newly introduced tools.
+export const CLAUDE_SDK_ALLOWED_TOOLS: string[] = [];
+
+/**
+ * Force every Ode-supported tool through the SDK permission callback even
+ * when a user's Claude settings happen to allow it. Flag settings have the
+ * highest user-controlled precedence, so these `ask` rules remove the
+ * auto-allow path that would otherwise bypass `canUseTool`.
+ */
+export const CLAUDE_SDK_SETTINGS = {
+  permissions: { ask: CLAUDE_SDK_PERMISSION_TOOLS },
+} satisfies Settings;
+
+async function buildClaudeSdkUserMessage(
+  sessionId: string,
+  parts: ReturnType<typeof buildPromptParts>
+): Promise<SDKUserMessage> {
+  const content: Array<Record<string, unknown>> = [];
+  const text = buildPromptText(parts);
+  if (text) content.push({ type: "text", text });
+  for (const part of parts) {
+    if (part.type !== "image") continue;
+    const mime = part.mimeType.toLowerCase();
+    if (!["image/jpeg", "image/png", "image/gif", "image/webp"].includes(mime)) continue;
+    const data = Buffer.from(await Bun.file(part.path).arrayBuffer()).toString("base64");
+    content.push({
+      type: "image",
+      source: { type: "base64", media_type: mime, data },
+    });
+  }
+  return {
+    type: "user",
+    message: { role: "user", content } as any,
+    parent_tool_use_id: null,
+    session_id: sessionId,
+  };
+}
+
+async function handleSdkAskUserQuestion(
+  sessionId: string,
+  input: Record<string, unknown>,
+  requestId: string,
+  signal?: AbortSignal
+): Promise<Record<string, unknown>> {
+  const questions = Array.isArray(input.questions)
+    ? input.questions.filter((question): question is Record<string, unknown> => Boolean(question) && typeof question === "object")
+    : [];
+  if (questions.length === 0) return input;
+  const deferred = createDeferred<
+    { status: "answered"; answers: string[] } | { status: "cancelled"; reason?: string }
+  >();
+  const abort = () => deferred.resolve({ status: "cancelled", reason: "Claude question aborted" });
+  signal?.addEventListener("abort", abort, { once: true });
+  pendingQuestions.set(sessionId, { requestId, questionCount: questions.length, deferred });
+  runtime.publishSessionEvent(sessionId, {
+    type: "question.asked",
+    properties: { id: requestId, sessionID: sessionId, questions },
+  });
+  let outcome: { status: "answered"; answers: string[] } | { status: "cancelled"; reason?: string };
+  try {
+    outcome = await deferred.promise;
+  } finally {
+    signal?.removeEventListener("abort", abort);
+    const pending = pendingQuestions.get(sessionId);
+    if (pending?.requestId === requestId) pendingQuestions.delete(sessionId);
+  }
+  if (outcome.status === "cancelled") throw new Error(outcome.reason ?? "Claude question cancelled");
+  const answerMap: Record<string, string> = {};
+  questions.forEach((question, index) => {
+    const key = typeof question.question === "string" ? question.question : String(index);
+    answerMap[key] = outcome.answers[index] ?? "";
+  });
+  return { ...input, answers: answerMap };
+}
+
+export function createClaudeSdkCanUseTool(sessionId: string): CanUseTool {
+  return async (toolName, toolInput, control): Promise<PermissionResult> => {
+    if (toolName !== "AskUserQuestion" && CLAUDE_SDK_PERMISSION_TOOLS.includes(toolName)) {
+      return { behavior: "allow", updatedInput: toolInput };
+    }
+    if (toolName !== "AskUserQuestion") {
+      return {
+        behavior: "deny",
+        message: `Ode has not approved the Claude tool ${toolName}.`,
+      };
+    }
+    const questions = Array.isArray(toolInput.questions)
+      ? toolInput.questions.filter((question) => Boolean(question) && typeof question === "object")
+      : [];
+    if (questions.length === 0) {
+      return {
+        behavior: "deny",
+        message: "AskUserQuestion contained no valid questions.",
+      };
+    }
+    const updatedInput = await handleSdkAskUserQuestion(
+      sessionId,
+      toolInput,
+      control.requestId || control.toolUseID,
+      control.signal
+    );
+    return {
+      behavior: "allow",
+      updatedInput,
+      decisionClassification: "user_temporary",
+    };
+  };
+}
+
+async function* singleClaudeMessage(message: SDKUserMessage): AsyncGenerator<SDKUserMessage> {
+  yield message;
+}
+
+async function sendMessageViaSdk(
+  channelId: string,
+  sessionId: string,
+  input: AgentInput,
+  workingPath: string,
+  options?: OpenCodeOptions,
+  context?: OpenCodeMessageContext
+): Promise<OpenCodeMessage[]> {
+  const sessionKey = `${channelId}:${sessionId}`;
+  runtime.beginRequest(sessionKey);
+  try {
+    return await runtime.withSessionLock(sessionKey, async () => {
+      const agent = options?.agent;
+      const planMode = agent?.trim().toLowerCase() === "plan";
+      const parts = buildPromptParts(channelId, input, { ...options, agent }, context);
+      const userMessage = await buildClaudeSdkUserMessage(sessionId, parts);
+      const isNewSession = newSessions.has(sessionId);
+      const env = { ...process.env, ...runtime.getSessionEnvironment(sessionId), PWD: workingPath };
+      const systemPrompt = buildSystemPrompt(context?.slack);
+      const sdkQuery = queryClaude({
+        prompt: singleClaudeMessage(userMessage),
+        options: {
+          cwd: workingPath,
+          env,
+          ...(isNewSession ? { sessionId } : { resume: sessionId }),
+          includePartialMessages: true,
+          includeHookEvents: true,
+          forwardSubagentText: true,
+          agentProgressSummaries: true,
+          settingSources: ["user", "project", "local"],
+          systemPrompt: {
+            type: "preset",
+            preset: "claude_code",
+            ...(systemPrompt ? { append: systemPrompt } : {}),
+          },
+          tools: { type: "preset", preset: "claude_code" },
+          allowedTools: CLAUDE_SDK_ALLOWED_TOOLS,
+          settings: CLAUDE_SDK_SETTINGS,
+          permissionMode: planMode ? "plan" : "default",
+          effort: options?.reasoningEffort,
+          canUseTool: createClaudeSdkCanUseTool(sessionId),
+        },
+      });
+      activeSdkQueries.set(sessionId, sdkQuery);
+
+      let resultText = "";
+      let observedSessionId = sessionId;
+      try {
+        for await (const message of sdkQuery) {
+          const sdkMessage = message as SDKMessage & { session_id?: string; result?: string; is_error?: boolean; error?: string };
+          if (typeof sdkMessage.session_id === "string" && sdkMessage.session_id) {
+            observedSessionId = sdkMessage.session_id;
+          }
+          publishClaudeRecordAsSessionEvents(
+            sdkMessage as unknown as ClaudeJsonRecord,
+            sessionId,
+            observedSessionId
+          );
+          if (sdkMessage.type === "result") {
+            if (sdkMessage.is_error) {
+              throw new Error(sdkMessage.error || sdkMessage.result || "Claude Agent SDK returned an error");
+            }
+            if (typeof sdkMessage.result === "string") resultText = sdkMessage.result.trim();
+          }
+        }
+      } finally {
+        activeSdkQueries.delete(sessionId);
+      }
+
+      if (observedSessionId !== sessionId && context?.slack?.threadId) {
+        runtime.setSessionEnvironment(observedSessionId, runtime.getSessionEnvironment(sessionId));
+        setThreadSessionId(channelId, context.slack.threadId, observedSessionId);
+      }
+      newSessions.delete(sessionId);
+      newSessions.delete(observedSessionId);
+      if (!resultText) throw new Error("Claude Agent SDK returned empty response");
+      return [{ text: resultText, messageType: "assistant" }];
+    });
+  } finally {
+    runtime.endRequest(sessionKey);
+  }
+}
+
+export async function sendMessage(
+  channelId: string,
+  sessionId: string,
+  input: AgentInput,
+  workingPath: string,
+  options?: OpenCodeOptions,
+  context?: OpenCodeMessageContext
+): Promise<OpenCodeMessage[]> {
+  if (process.env.ODE_CLAUDE_LEGACY_CLI === "1") {
+    return sendMessageViaCli(channelId, sessionId, input, workingPath, options, context);
+  }
+  return sendMessageViaSdk(channelId, sessionId, input, workingPath, options, context);
+}
+
 /**
  * Resolve a pending AskUserQuestion request with the user's answers. The
  * adapter routes Claude question replies here when the kernel collects all
@@ -798,11 +1093,19 @@ export const subscribeToSession = runtime.subscribeToSession.bind(runtime);
 
 export async function abortSession(sessionId: string, _directory?: string): Promise<void> {
   cancelPendingQuestion(sessionId, "Claude session aborted");
+  await activeSdkQueries.get(sessionId)?.interrupt().catch(() => undefined);
+  activeSdkQueries.get(sessionId)?.close();
+  activeSdkQueries.delete(sessionId);
   await runtime.abortSession(sessionId);
 }
 
 export async function cancelActiveRequest(channelId: string, sessionId: string): Promise<boolean> {
   cancelPendingQuestion(sessionId, "Claude request cancelled");
+  const sdkQuery = activeSdkQueries.get(sessionId);
+  if (sdkQuery) {
+    await sdkQuery.interrupt().catch(() => undefined);
+    return true;
+  }
   return runtime.cancelActiveRequest(channelId, sessionId);
 }
 

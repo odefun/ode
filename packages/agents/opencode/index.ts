@@ -4,12 +4,15 @@ export {
   isServerReady,
   createSessionInstance,
   getSessionClient,
+  replyToOpenCodePermission,
+  getSessionRuntimeSnapshot,
   getAnyServerUrl,
   ensureSession,
   ensureValidSession,
   stopAllSessions,
   subscribeToSession,
   type EventHandler,
+  type OpenCodeSessionRuntimeSnapshot,
 } from "./server";
 
 export {

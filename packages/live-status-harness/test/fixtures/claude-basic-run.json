@@ -9,7 +9,7 @@
     "threadId": "T_TEST",
     "sessionId": "session-1",
     "startedAt": 1700000000000,
-    "eventCount": 3
+    "eventCount": 4
   },
   "events": [
     {
@@ -76,6 +76,31 @@
             "event": {
               "type": "content_block_stop",
               "index": 1
+            }
+          }
+        }
+      }
+    },
+    {
+      "runId": "claudecode_1700000000000_deadbeef",
+      "sessionId": "session-1",
+      "provider": "claudecode",
+      "timestamp": 1700000000400,
+      "index": 3,
+      "event": {
+        "type": "claude.raw.user",
+        "properties": {
+          "record": {
+            "type": "user",
+            "message": {
+              "content": [
+                {
+                  "type": "tool_result",
+                  "tool_use_id": "tool-1",
+                  "content": "README contents",
+                  "is_error": false
+                }
+              ]
             }
           }
         }

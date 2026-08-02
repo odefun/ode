@@ -1,12 +1,10 @@
 import * as claude from "./claude";
 import * as codex from "./codex";
 import * as kimi from "./kimi";
-import * as kiro from "./kiro";
 import * as kilo from "./kilo";
 import * as opencode from "./opencode";
 import * as qwen from "./qwen";
 import * as goose from "./goose";
-import * as gemini from "./gemini";
 import * as pi from "./pi";
 import * as openhands from "./openhands";
 import * as codebuddy from "./codebuddy";
@@ -23,6 +21,7 @@ import type {
   OpenCodeMessageContext,
   OpenCodeOptions,
   OpenCodeSessionInfo,
+  AgentInput,
 } from "./types";
 
 export type AgentProvider = {
@@ -40,7 +39,7 @@ export type AgentProvider = {
   sendMessage: (
     channelId: string,
     sessionId: string,
-    message: string,
+    input: AgentInput,
     workingPath: string,
     options?: OpenCodeOptions,
     context?: OpenCodeMessageContext
@@ -58,11 +57,9 @@ const providerModules = {
   claudecode: claude,
   codex,
   kimi,
-  kiro,
   kilo,
   qwen,
   goose,
-  gemini,
   pi,
   openhands,
   codebuddy,

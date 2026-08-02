@@ -9,7 +9,9 @@ import {
   type SessionEnvironment as RuntimeSessionEnvironment,
 } from "../runtime/base";
 import { createCliThreadSessionManager } from "../runtime/cli-session";
+import { inspectCliProtocol } from "../runtime/protocol-drift";
 import type {
+  AgentInput,
   OpenCodeMessage,
   OpenCodeMessageContext,
   OpenCodeOptions,
@@ -38,6 +40,7 @@ const runtime = new CliAgentRuntime("Qwen");
 /** See note in claude/client.ts — FIFO-bounded so abandoned sessions don't leak. */
 const NEW_SESSIONS_MAX_ENTRIES = 1000;
 const newSessions = new BoundedSet<string>(NEW_SESSIONS_MAX_ENTRIES);
+const QWEN_RECORD_TYPES = ["system", "assistant", "user", "stream_event", "result"];
 export const { createSession, getOrCreateSession } = createCliThreadSessionManager({
   providerId: "qwen",
   providerName: "Qwen",
@@ -67,8 +70,12 @@ export function buildQwenCommandArgs(params: {
   if (params.approvalMode === "plan") {
     args.push("--approval-mode", "plan");
   } else {
-    args.push("--yolo");
+    // Headless mode cannot relay Qwen's interactive "default" approval UI
+    // back to the originating IM thread. `auto` keeps the current classifier
+    // guardrails (fail-closed for risky operations) without granting YOLO.
+    args.push("--approval-mode", "auto");
   }
+  args.push("--max-wall-time", "10m", "--max-tool-calls", "100");
   if (!params.isNewSession) {
     args.push("--resume", params.sessionId);
   }
@@ -89,12 +96,20 @@ function publishQwenRecordAsSessionEvents(record: QwenJsonRecord, fallbackSessio
   const rawType = typeof record.type === "string" && record.type.trim()
     ? record.type.trim()
     : "unknown";
+  const streamEventType = typeof record.event?.type === "string" ? record.event.type : undefined;
   const eventPayload = {
     type: `qwen.raw.${rawType}`,
     properties: {
       record,
       recordType: rawType,
-      streamEventType: typeof record.event?.type === "string" ? record.event.type : undefined,
+      streamEventType,
+      ...inspectCliProtocol({
+        providerName: "Qwen",
+        recordType: rawType,
+        streamEventType,
+        knownRecordTypes: QWEN_RECORD_TYPES,
+        anthropicStyleStream: true,
+      }),
     },
   };
   runtime.publishSessionEvent(sessionId, eventPayload);
@@ -159,7 +174,7 @@ function parseQwenResponse(output: string): {
 export async function sendMessage(
   channelId: string,
   sessionId: string,
-  message: string,
+  input: AgentInput,
   workingPath: string,
   options?: OpenCodeOptions,
   context?: OpenCodeMessageContext
@@ -171,7 +186,7 @@ export async function sendMessage(
     return await runtime.withSessionLock(sessionKey, async () => {
       const agent = options?.agent;
       const approvalMode = agent?.trim().toLowerCase() === "plan" ? "plan" : undefined;
-      const parts = buildPromptParts(channelId, message, { ...options, agent }, context);
+      const parts = buildPromptParts(channelId, input, { ...options, agent }, context);
       const prompt = buildPromptText(parts);
       const systemPrompt = buildSystemPrompt(context?.slack);
       const qwenPrompt = buildSystemWrappedPrompt(systemPrompt, prompt);

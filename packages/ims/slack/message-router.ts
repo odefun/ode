@@ -6,12 +6,14 @@ import {
 } from "@/ims/shared/incoming-message-processor";
 import type { InboundDecision } from "@/core/model/inbound-decision";
 import type { RawInboundEvent } from "@/core/model/raw-inbound-event";
+import type { InboundAttachment } from "@/shared/agent-protocol";
 import { RuntimeCache } from "@/shared/cache/runtime-cache";
 import { SlackInboundAdapter } from "@/ims/slack/slack-inbound-adapter";
 import {
   deliveryStats,
   renderDeliveryStatsForSlack,
 } from "@/ims/shared/delivery-stats";
+import { downloadAttachments, type AttachmentSource } from "@/ims/shared/attachment-store";
 
 type RouterDeps = {
   app: any;
@@ -74,6 +76,7 @@ type IncomingMessageData = {
   text: string;
   threadId: string;
   messageId: string;
+  files: AttachmentSource[];
 };
 
 function syncWorkspaceAuth(
@@ -109,16 +112,36 @@ function extractMentionedUserIds(text: string): string[] {
 }
 
 function extractIncomingMessageData(message: any): IncomingMessageData | null {
-  if (message.subtype !== undefined) return null;
-  if (!("text" in message) || !message.text) return null;
+  if (message.subtype !== undefined && message.subtype !== "file_share") return null;
   if (!("user" in message) || !message.user) return null;
+
+  const text = typeof message.text === "string" ? message.text : "";
+  const files = Array.isArray(message.files)
+    ? message.files.flatMap((file: Record<string, unknown>): AttachmentSource[] => {
+        const url = typeof file.url_private_download === "string"
+          ? file.url_private_download
+          : typeof file.url_private === "string"
+            ? file.url_private
+            : "";
+        if (!url) return [];
+        return [{
+          id: typeof file.id === "string" ? file.id : undefined,
+          filename: typeof file.name === "string" ? file.name : undefined,
+          mimeType: typeof file.mimetype === "string" ? file.mimetype : undefined,
+          size: typeof file.size === "number" ? file.size : undefined,
+          url,
+        }];
+      })
+    : [];
+  if (!text.trim() && files.length === 0) return null;
 
   return {
     channelId: message.channel,
     userId: message.user,
-    text: message.text,
+    text,
     threadId: message.thread_ts || message.ts,
     messageId: message.ts,
+    files,
   };
 }
 
@@ -300,7 +323,7 @@ export function registerSlackMessageRouter(deps: RouterDeps): void {
       if (!incoming) return;
       contextData = incoming;
 
-      const { channelId, userId, text, threadId, messageId } = incoming;
+      const { channelId, userId, text, threadId, messageId, files } = incoming;
       const contextBotToken = context?.botToken as string | undefined;
       let workspaceAuth = syncWorkspaceAuth(
         deps,
@@ -364,6 +387,21 @@ export function registerSlackMessageRouter(deps: RouterDeps): void {
       });
 
       const runtimeBotId = contextBotToken ?? workspaceAuth?.botToken ?? "default";
+      let attachments: InboundAttachment[] = [];
+      if (files.length > 0) {
+        const token = contextBotToken ?? workspaceAuth?.botToken;
+        if (!token) {
+          throw new Error("No Slack bot token available to download attachments");
+        }
+        attachments = await downloadAttachments({
+          platform: "slack",
+          messageId,
+          sources: files.map((file) => ({
+            ...file,
+            headers: { Authorization: `Bearer ${token}` },
+          })),
+        });
+      }
       const isTopLevel = threadId === messageId;
       const threadOwnerMessage = deps.isThreadOwner(channelId, threadId, userId);
       const threadActive = deps.isThreadActive(channelId, threadId, runtimeBotId);
@@ -384,6 +422,7 @@ export function registerSlackMessageRouter(deps: RouterDeps): void {
         activeThread: threadActive,
         rawText: text,
         normalizedText: cleanText,
+        attachments,
         receivedAtMs: Date.now(),
       };
       const flowResult = toIncomingFlowResult(slackInboundAdapter.evaluate(inboundEvent));

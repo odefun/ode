@@ -223,9 +223,7 @@ export async function getSessionMeta(sessionId: string): Promise<SessionMeta | n
     }
     const providerRaw = data.agentProvider;
     const inferredAgentProvider: SessionAgentProvider =
-      providerRaw === "kiro" || data.sessionId.startsWith("kiro_")
-        ? "kiro"
-        : providerRaw === "kilo" || data.sessionId.startsWith("kilo_")
+      providerRaw === "kilo" || data.sessionId.startsWith("kilo_")
         ? "kilo"
         : providerRaw === "kimi" || data.sessionId.startsWith("kimi_")
         ? "kimi"
@@ -233,8 +231,6 @@ export async function getSessionMeta(sessionId: string): Promise<SessionMeta | n
         ? "qwen"
         : providerRaw === "goose" || data.sessionId.startsWith("goose_")
         ? "goose"
-        : providerRaw === "gemini" || data.sessionId.startsWith("gemini_")
-        ? "gemini"
         : providerRaw === "codex" || data.sessionId.startsWith("codex_")
         ? "codex"
         : providerRaw === "claudecode" || providerRaw === "claude" || data.sessionId.startsWith("claude_") || data.sessionId.startsWith("claudecode_")

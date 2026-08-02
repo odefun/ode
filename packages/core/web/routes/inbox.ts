@@ -4,6 +4,7 @@ import {
   getMessageThreadDetailPage,
   getMessageThreadPage,
   getMessageThreadSummaryById,
+  getOdeRunEventPage,
 } from "@/config/local/inbox";
 import { jsonResponse, parsePositiveInt, runRoute } from "../http";
 
@@ -75,6 +76,44 @@ export function registerInboxRoutes(app: Elysia): void {
       }
     );
   });
+
+  app.get(
+    "/api/message-threads/:id/events",
+    async ({
+      params,
+      query,
+    }: {
+      params: { id?: string };
+      query: Record<string, string | undefined>;
+    }) => {
+      return runRoute(
+        async () => {
+          const id = params.id?.trim();
+          if (!id) throw new Error("Missing thread id");
+          const limit = parsePositiveInt(
+            typeof query.limit === "string" ? query.limit : null,
+            100,
+            500,
+          );
+          const result = getOdeRunEventPage(id, {
+            limit,
+            includeRaw: query.includeRaw === "true",
+          });
+          if (!result) throw new Error("Thread not found");
+          return result;
+        },
+        (result) => jsonResponse(200, { ok: true, result }),
+        {
+          fallbackMessage: "Internal server error",
+          resolveStatus: (message) => {
+            if (message === "Missing thread id") return 400;
+            if (message === "Thread not found") return 404;
+            return 500;
+          },
+        }
+      );
+    }
+  );
 
   // Paginated details for a given thread (default 10 per page).
   app.get(

@@ -41,6 +41,7 @@ import { sendChannelMessage as sendDiscordChannelMessage } from "@/ims/discord/c
 import { sendChannelMessage as sendLarkChannelMessage } from "@/ims/lark/client";
 import { type AgentProviderId, isAgentProviderId } from "@/shared/agent-provider";
 import { log } from "@/utils";
+import { createAgentInput } from "@/shared/agent-protocol";
 
 // ---------------------------------------------------------------------------
 // One-time task scheduler.
@@ -419,7 +420,7 @@ async function runTask(task: TaskRecord): Promise<void> {
       agent.sendMessage(
         task.channelId,
         sessionId,
-        task.messageText,
+        createAgentInput(task.messageText),
         cwd,
         options,
         buildTaskAgentContext(task),

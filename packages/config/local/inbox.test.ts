@@ -10,13 +10,16 @@ import {
   completeAgentResult,
   ensureMessageThread,
   failAgentResult,
+  getOdeRunEvents,
   getMessageThreadById,
   getMessageThreadPage,
   recordAgentQuestion,
+  recordOdeRunEvents,
   recordQuestionReply,
   recordUserPrompt,
   startAgentResult,
 } from "@/config/local/inbox";
+import { createOdeRunEvent } from "@/core/runtime/ode-run-events";
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "ode-inbox-test-"));
 const inboxDbFile = path.join(tempDir, "inbox.db");
@@ -92,6 +95,34 @@ describe("local inbox store", () => {
     expect(agentResult?.resultText).toContain("feature C was removed");
     expect(agentResult?.status).toBe("completed");
     expect(detail?.context?.isFirstMessageInThread).toBe(true);
+  });
+
+  it("persists ordered canonical run events with raw provider payloads", () => {
+    const threadKey = buildThreadKey("C-events", "T-events");
+    ensureMessageThread({
+      platform: "discord",
+      channelId: "C-events",
+      threadId: "T-events",
+      replyThreadId: "T-events",
+      sessionId: "session-events",
+      providerId: "kimi",
+    });
+    const started = createOdeRunEvent(
+      { providerId: "kimi", sessionId: "session-events", runId: "run-1", timestamp: 10 },
+      "run.started",
+      { transport: "acp" }
+    );
+    const raw = createOdeRunEvent(
+      { providerId: "kimi", sessionId: "session-events", runId: "run-1", timestamp: 20 },
+      "provider.raw",
+      { providerType: "agent_message_chunk" },
+      { rawEvent: { type: "kimi.acp.agent_message_chunk" } }
+    );
+    recordOdeRunEvents(threadKey, [raw, started]);
+
+    const events = getOdeRunEvents({ threadKey, runId: "run-1" });
+    expect(events.map((event) => event.type)).toEqual(["run.started", "provider.raw"]);
+    expect(events[1]?.rawEvent).toEqual({ type: "kimi.acp.agent_message_chunk" });
   });
 
   it("records cron job source metadata at the thread level", () => {

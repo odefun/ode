@@ -50,7 +50,30 @@ describe("status message formatting", () => {
     };
 
     const text = buildStatusMessageByProvider("goose", request, "/tmp/repo", state, "medium");
-    expect(text).toContain("_Running tool: subagent_");
+    expect(text).toContain("*Running tool: subagent*");
     expect(text).not.toContain("Waiting for subagent output");
+  });
+
+  it("recognizes OpenCode task tools as subagents", () => {
+    const state: SessionMessageState = {
+      sessionTitle: "OpenCode is running...",
+      phaseStatus: "Running tool: task",
+      currentText: "Inspecting packages",
+      tools: [
+        {
+          id: "tool-task",
+          name: "task",
+          title: "Audit repo state vs docs",
+          status: "running",
+          metadata: { startedAtMs: Date.now() - 40_000 },
+        },
+      ],
+      todos: [],
+      startedAt: Date.now() - 60_000,
+    };
+
+    const text = buildStatusMessageByProvider("opencode", request, "/tmp/repo", state, "medium");
+    expect(text).toContain("Waiting for subagent: Audit repo state vs docs");
+    expect(text).toContain("Inspecting packages");
   });
 });

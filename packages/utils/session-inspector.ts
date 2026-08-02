@@ -3,12 +3,10 @@ import {
   extractClaudeRecord,
 } from "@/agents/claude/session-state";
 import { applyCodexRecordToState, extractCodexRecord } from "@/agents/codex/session-state";
-import { applyKiroRecordToState, extractKiroRecord } from "@/agents/kiro/session-state";
 import { applyKimiRecordToState, extractKimiRecord } from "@/agents/kimi/session-state";
 import { applyKiloRecordToState, extractKiloRecord } from "@/agents/kilo/session-state";
 import { applyQwenRecordToState, extractQwenRecord } from "@/agents/qwen/session-state";
 import { applyGooseRecordToState, extractGooseRecord } from "@/agents/goose/session-state";
-import { applyGeminiRecordToState, extractGeminiRecord } from "@/agents/gemini/session-state";
 import { applyPiRecordToState, extractPiRecord } from "@/agents/pi/session-state";
 import { applyOpenHandsRecordToState, extractOpenHandsRecord } from "@/agents/openhands/session-state";
 import { applyCodeBuddyRecordToState, extractCodeBuddyRecord } from "@/agents/codebuddy/session-state";
@@ -19,6 +17,7 @@ import {
   type StreamToolState,
 } from "@/agents/session-state/shared";
 import type { AgentProviderId } from "@/shared/agent-provider";
+import { getAgentProviderLabel } from "@/shared/agent-provider";
 
 export type SessionEvent = {
   timestamp: number;
@@ -78,7 +77,7 @@ type ProviderParser = {
     eventData: Record<string, unknown>,
     eventProps: Record<string, unknown>
   ) => unknown | null;
-  apply: (record: unknown) => void;
+  apply: (record: unknown, timestamp: number) => void;
 };
 
 function applySessionUpdatedEvent(state: SessionMessageState, eventProps: Record<string, unknown>): void {
@@ -241,7 +240,11 @@ function extractTokenUsage(value: unknown, fallbackCost?: unknown): SessionToken
   };
 }
 
-function applyMetadataFromRecord(state: SessionMessageState, source: unknown): void {
+function applyMetadataFromRecord(
+  state: SessionMessageState,
+  source: unknown,
+  provider?: AgentProviderId
+): void {
   const record = asRecord(source);
   if (!record) return;
   const part = asRecord(record.part);
@@ -286,7 +289,10 @@ function applyMetadataFromRecord(state: SessionMessageState, source: unknown): v
     ?? extractTokenUsage(record.info, record.cost);
   if (tokenUsage) {
     const currentTotal = state.tokenUsage?.total ?? 0;
-    if (tokenUsage.total > 0 || currentTotal <= 0) {
+    const shouldApply = provider === "claudecode"
+      ? currentTotal <= 0 || tokenUsage.total >= currentTotal
+      : tokenUsage.total > 0 || currentTotal <= 0;
+    if (shouldApply) {
       state.tokenUsage = tokenUsage;
     }
   }
@@ -307,7 +313,8 @@ function extractMessageInfo(eventProps: Record<string, unknown>): Record<string,
 function applyMessageUpdatedEvent(
   state: SessionMessageState,
   eventProps: Record<string, unknown>,
-  messageRoles?: Map<string, string>
+  messageRoles?: Map<string, string>,
+  provider?: AgentProviderId
 ): void {
   const info = extractMessageInfo(eventProps);
   if (!info) return;
@@ -320,7 +327,7 @@ function applyMessageUpdatedEvent(
     }
   }
 
-  applyMetadataFromRecord(state, info);
+  applyMetadataFromRecord(state, info, provider);
 }
 
 function isOpencodeThinkingStatusWithContent(status: string): boolean {
@@ -394,6 +401,20 @@ function applyMessagePartUpdatedEvent(
 
   if (part.type === "tool") {
     const toolState = (part.state || {}) as Record<string, unknown>;
+    const toolTime = asRecord(toolState.time);
+    const eventContext = asRecord(eventProps.odeContext);
+    const rawMetadata = asRecord(toolState.metadata) ?? {};
+    const metadata: Record<string, unknown> = {
+      ...rawMetadata,
+      ...(typeof toolTime?.start === "number" ? { startedAtMs: toolTime.start } : {}),
+      ...(typeof eventContext?.sourceSessionID === "string"
+        ? { sourceSessionId: eventContext.sourceSessionID }
+        : {}),
+      ...(eventContext?.childSession === true ? { childSession: true } : {}),
+      ...(typeof eventContext?.childTitle === "string"
+        ? { childTitle: eventContext.childTitle }
+        : {}),
+    };
     const existingIdx = state.tools.findIndex((t) => t.id === part.id);
     const toolInfo: SessionTool = {
       id: typeof part.id === "string" ? part.id : "unknown-tool",
@@ -405,7 +426,7 @@ function applyMessagePartUpdatedEvent(
         : undefined,
       output: typeof toolState.output === "string" ? toolState.output : undefined,
       error: typeof toolState.error === "string" ? toolState.error : undefined,
-      metadata: toolState.metadata as Record<string, unknown> | undefined,
+      metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
     };
 
     if (existingIdx >= 0) {
@@ -415,6 +436,24 @@ function applyMessagePartUpdatedEvent(
     }
 
     if (!isSessionScopedPart) {
+      return;
+    }
+
+    if (toolInfo.name.trim().toLowerCase() === "subagent") {
+      const title = toolInfo.title?.trim();
+      const progress = typeof toolInfo.metadata?.progress === "string"
+        ? toolInfo.metadata.progress.trim()
+        : typeof toolInfo.metadata?.lastTool === "string"
+          ? toolInfo.metadata.lastTool.trim()
+          : "";
+      const label = title ? `: ${title}${progress ? ` — ${progress}` : ""}` : "";
+      if (toolInfo.status === "running" || toolInfo.status === "pending") {
+        updatePhaseStatus(state, `Running subagent${label}`, provider);
+      } else if (toolInfo.status === "completed") {
+        updatePhaseStatus(state, `Finished subagent${title ? `: ${title}` : ""}`, provider);
+      } else if (toolInfo.status === "error") {
+        updatePhaseStatus(state, `Subagent failed${title ? `: ${title}` : ""}`, provider);
+      }
       return;
     }
 
@@ -564,9 +603,7 @@ export function buildSessionMessageState(
   const codexToolById = new Map<string, SessionTool>();
   const kimiToolById = new Map<string, SessionTool>();
   const kiloToolById = new Map<string, SessionTool>();
-  const geminiToolById = new Map<string, SessionTool>();
   const openHandsToolById = new Map<string, SessionTool>();
-  const kiroTodoById = new Map<string, SessionTodo>();
   // Map of messageID -> role ("user" | "assistant" | ...) built from
   // `message.updated` events. Used to avoid treating user prompt TextParts
   // as assistant output (OpenCode emits TextPart for both roles and
@@ -584,32 +621,25 @@ export function buildSessionMessageState(
     codexToolById.set(existingTool.id, { ...existingTool });
     kimiToolById.set(existingTool.id, { ...existingTool });
     kiloToolById.set(existingTool.id, { ...existingTool });
-    geminiToolById.set(existingTool.id, { ...existingTool });
     openHandsToolById.set(existingTool.id, { ...existingTool });
-  }
-
-  for (const existingTodo of state.todos) {
-    const key = existingTodo.content || `todo-${kiroTodoById.size}`;
-    kiroTodoById.set(key, { ...existingTodo });
   }
 
   const providerParsers: ProviderParser[] = [
     {
       extract: extractClaudeRecord,
-      apply: (record) => {
-        applyClaudeRecordToState(state, record as Parameters<typeof applyClaudeRecordToState>[1], sharedStreamState);
+      apply: (record, timestamp) => {
+        applyClaudeRecordToState(
+          state,
+          record as Parameters<typeof applyClaudeRecordToState>[1],
+          sharedStreamState,
+          timestamp
+        );
       },
     },
     {
       extract: extractCodexRecord,
       apply: (record) => {
         applyCodexRecordToState(state, record as Parameters<typeof applyCodexRecordToState>[1], codexToolById);
-      },
-    },
-    {
-      extract: extractKiroRecord,
-      apply: (record) => {
-        applyKiroRecordToState(state, record as Parameters<typeof applyKiroRecordToState>[1], kiroTodoById);
       },
     },
     {
@@ -634,12 +664,6 @@ export function buildSessionMessageState(
       extract: extractGooseRecord,
       apply: (record) => {
         applyGooseRecordToState(state, record as Parameters<typeof applyGooseRecordToState>[1], sharedStreamState);
-      },
-    },
-    {
-      extract: extractGeminiRecord,
-      apply: (record) => {
-        applyGeminiRecordToState(state, record as Parameters<typeof applyGeminiRecordToState>[1], geminiToolById);
       },
     },
     {
@@ -673,19 +697,29 @@ export function buildSessionMessageState(
     const eventProps = getEventProperties(eventData);
     const type = event.type;
 
-    applyMetadataFromRecord(state, eventData);
-    applyMetadataFromRecord(state, eventProps);
-    applyMetadataFromRecord(state, eventProps.record);
-    applyMetadataFromRecord(state, eventProps.message);
-    applyMetadataFromRecord(state, eventProps.info);
-    applyMetadataFromRecord(state, eventProps.part);
-    applyMetadataFromRecord(state, eventProps.event);
+    applyMetadataFromRecord(state, eventData, provider);
+    applyMetadataFromRecord(state, eventProps, provider);
+    applyMetadataFromRecord(state, eventProps.record, provider);
+    applyMetadataFromRecord(state, eventProps.message, provider);
+    applyMetadataFromRecord(state, eventProps.info, provider);
+    applyMetadataFromRecord(state, eventProps.part, provider);
+    applyMetadataFromRecord(state, eventProps.event, provider);
+
+    if (eventProps.protocolKnown === false) {
+      const protocolLabel = asNonEmptyString(eventProps.protocolLabel)
+        ?? asNonEmptyString(eventProps.streamEventType)
+        ?? asNonEmptyString(eventProps.recordType)
+        ?? type;
+      const providerLabel = provider ? getAgentProviderLabel(provider) : "Coding CLI";
+      state.phaseStatus = `${providerLabel} integration update required: ${protocolLabel}`;
+      continue;
+    }
 
     let handledByProvider = false;
     for (const parser of providerParsers) {
       const record = parser.extract(type, eventData, eventProps);
       if (!record) continue;
-      parser.apply(record);
+      parser.apply(record, event.timestamp);
       handledByProvider = true;
       break;
     }
@@ -698,7 +732,7 @@ export function buildSessionMessageState(
     }
 
     if (type === "message.updated") {
-      applyMessageUpdatedEvent(state, eventProps, messageRoles);
+      applyMessageUpdatedEvent(state, eventProps, messageRoles, provider);
     }
 
     if (type === "session.status") {

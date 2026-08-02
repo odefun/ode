@@ -52,6 +52,7 @@ import {
 } from "@/ims/lark/utils/card-action-utils";
 import { LarkRuntimeState } from "@/ims/lark/state/runtime-state";
 import type { RawInboundEvent } from "@/core/model/raw-inbound-event";
+import { downloadAttachments, type AttachmentSource } from "@/ims/shared/attachment-store";
 
 let larkRuntimeStarted = false;
 
@@ -336,6 +337,57 @@ function parseLarkText(content: string | undefined): string {
   } catch {
     return content;
   }
+}
+
+function parseLarkAttachmentSources(params: {
+  messageType: string;
+  content: string | undefined;
+  messageId: string;
+  token: string;
+}): AttachmentSource[] {
+  if (!params.content) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(params.content);
+  } catch {
+    return [];
+  }
+
+  const candidates: Array<{ key: string; type: "image" | "file"; filename?: string }> = [];
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    const record = value as Record<string, unknown>;
+    const fileName = typeof record.file_name === "string" ? record.file_name : undefined;
+    if (typeof record.file_key === "string" && record.file_key) {
+      candidates.push({ key: record.file_key, type: "file", filename: fileName });
+    }
+    if (typeof record.image_key === "string" && record.image_key) {
+      candidates.push({ key: record.image_key, type: "image", filename: fileName });
+    }
+    for (const child of Object.values(record)) visit(child);
+  };
+  visit(parsed);
+
+  const directType = params.messageType === "image" ? "image" : "file";
+  const seen = new Set<string>();
+  return candidates.flatMap((candidate): AttachmentSource[] => {
+    if (params.messageType !== "post" && candidate.type !== directType) return [];
+    const resourceType = params.messageType === "post" ? candidate.type : directType;
+    const dedupeKey = `${resourceType}:${candidate.key}`;
+    if (seen.has(dedupeKey)) return [];
+    seen.add(dedupeKey);
+    const extension = resourceType === "image" ? ".png" : "";
+    return [{
+      id: candidate.key,
+      filename: candidate.filename ?? `${candidate.key}${extension}`,
+      url: `https://open.feishu.cn/open-apis/im/v1/messages/${encodeURIComponent(params.messageId)}/resources/${encodeURIComponent(candidate.key)}?type=${resourceType}`,
+      headers: { Authorization: `Bearer ${params.token}` },
+    }];
+  });
 }
 
 async function buildLarkContext(
@@ -875,11 +927,9 @@ async function processLarkCardAction(payload: unknown): Promise<void> {
       || provider === "claudecode"
       || provider === "codex"
       || provider === "kimi"
-      || provider === "kiro"
       || provider === "kilo"
       || provider === "qwen"
       || provider === "goose"
-      || provider === "gemini"
     ) {
       setChannelAgentProvider(channelId, provider);
     }
@@ -1096,16 +1146,30 @@ async function processLarkIncomingEvent(event: LarkIncomingEvent, processorAppId
   const botOpenId = await getBotOpenIdForChannel(channelId);
   const isSelfMessage = Boolean(botOpenId && senderOpenId === botOpenId);
 
-  if (message?.message_type !== "text") {
-    logLarkEvent("Lark inbound ignored: non-text message", {
+  const messageType = message?.message_type ?? "";
+  const rawText = messageType === "text" || messageType === "post"
+    ? parseLarkText(message?.content)
+    : "";
+  const tenantToken = mappedCreds ? await getLarkTenantAccessToken(mappedCreds) : "";
+  const attachmentSources = tenantToken
+    ? parseLarkAttachmentSources({
+        messageType,
+        content: message?.content,
+        messageId,
+        token: tenantToken,
+      })
+    : [];
+  const attachments = attachmentSources.length > 0
+    ? await downloadAttachments({ platform: "lark", messageId, sources: attachmentSources })
+    : [];
+  if (!rawText.trim() && attachments.length === 0) {
+    logLarkEvent("Lark inbound ignored: unsupported empty message", {
       channelId,
       messageId,
-      messageType: message?.message_type ?? "",
+      messageType,
     });
     return;
   }
-
-  const rawText = parseLarkText(message?.content);
   const mentions = parseMentionedOpenIds(message?.mentions);
   const isMentioned = botOpenId
     ? (mentions.includes(botOpenId) || isBotMentionedInText(rawText, botOpenId))
@@ -1132,6 +1196,7 @@ async function processLarkIncomingEvent(event: LarkIncomingEvent, processorAppId
     activeThread: active,
     rawText,
     normalizedText: text,
+    attachments,
     receivedAtMs: Date.now(),
   };
 

@@ -262,7 +262,7 @@ describe("goose stream status parsing", () => {
       { content: "Read README", status: "completed" },
       { content: "Write report", status: "in_progress" },
     ]);
-    expect(text).toContain("*Tasks*");
+    expect(text).toContain("**Plan**");
     expect(text).toContain("- [ ] Inspect repository");
     expect(text).toContain("- [x] Read README");
     expect(text).toContain("- [~] Write report");

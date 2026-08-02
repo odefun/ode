@@ -31,6 +31,13 @@ import {
 import type { InboundAdapter } from "@/ims/shared/inbound-adapter";
 import type { RawInboundEvent } from "@/core/model/raw-inbound-event";
 import type { RuntimeRequestContext } from "@/core/kernel/request-context";
+import {
+  getAgentInputText,
+  renderAgentInputAsText,
+  type AgentInput,
+  type InboundAttachment,
+  type OdeRunEvent,
+} from "@/shared/agent-protocol";
 
 export type RuntimeDeps = {
   platform: "slack" | "discord" | "lark";
@@ -41,12 +48,14 @@ export type RuntimeDeps = {
 type RuntimeState = {
   liveEventHistory: Map<string, SessionEvent[]>;
   liveParsedState: Map<string, SessionMessageState>;
+  liveRunEvents: Map<string, OdeRunEvent[]>;
 };
 
 function createRuntimeState(): RuntimeState {
   return {
     liveEventHistory: new Map(),
     liveParsedState: new Map(),
+    liveRunEvents: new Map(),
   };
 }
 
@@ -143,7 +152,7 @@ export class KernelRuntimeFacade {
             messageId: event.messageId,
             botToken: event.botId,
           },
-          decision.text
+          decision.input
         );
       },
     });
@@ -157,6 +166,7 @@ export class KernelRuntimeFacade {
         mentionedBot: event.mentionedBot,
         activeThread: event.activeThread,
         normalizedText: event.normalizedText,
+        attachments: event.attachments,
       }),
     };
 
@@ -177,6 +187,7 @@ export class KernelRuntimeFacade {
       mentionedBot: event.mentionedBot,
       activeThread: event.activeThread,
       normalizedText: event.normalizedText,
+      attachments: event.attachments,
     });
 
     if (decision.kind === "ignore") {
@@ -206,7 +217,8 @@ export class KernelRuntimeFacade {
         messageId: event.messageId,
         botToken: event.botId,
       },
-      decision.text
+      decision.text,
+      event.attachments
     );
   }
 
@@ -245,7 +257,9 @@ export class KernelRuntimeFacade {
     await recoverPendingRequestsInternal(this.runtimeDeps.im, this.deps.platform, options);
   }
 
-  private async handleUserMessageInternal(context: RuntimeRequestContext, text: string): Promise<void> {
+  private async handleUserMessageInternal(context: RuntimeRequestContext, input: AgentInput): Promise<void> {
+    const text = getAgentInputText(input);
+    const promptText = renderAgentInputAsText(input);
     const { channelId, replyThreadId, threadId } = context;
     const rawChannelId = context.rawChannelId ?? channelId;
     const prepared = await prepareRuntimeSession({
@@ -308,7 +322,7 @@ export class KernelRuntimeFacade {
         threadKey,
         messageId: context.messageId,
         userId: context.userId,
-        promptText: text,
+        promptText,
       });
       const agentDetail = startAgentResult({
         threadKey,
@@ -337,7 +351,7 @@ export class KernelRuntimeFacade {
       context,
       sessionId,
       cwd,
-      message: text,
+      input,
       isFirstMessageInThread: created,
       agentContext,
       options,
@@ -345,6 +359,7 @@ export class KernelRuntimeFacade {
       threadKey,
       liveEventHistory: this.state.liveEventHistory,
       liveParsedState: this.state.liveParsedState,
+      liveRunEvents: this.state.liveRunEvents,
       publishFinalText: async (params) => {
         await publishFinalText({
           im: this.runtimeDeps.im,
@@ -356,7 +371,11 @@ export class KernelRuntimeFacade {
     if (!responses) return;
   }
 
-  private async dispatchCoreMessage(context: RuntimeRequestContext, text: string): Promise<void> {
+  private async dispatchCoreMessage(
+    context: RuntimeRequestContext,
+    text: string,
+    attachments: readonly InboundAttachment[] = []
+  ): Promise<void> {
     if (isMessageProcessed(context.channelId, context.threadId, context.messageId)) {
       log.debug("Skipping duplicate message", { messageId: context.messageId });
       return;
@@ -393,6 +412,7 @@ export class KernelRuntimeFacade {
       activeThread: true,
       rawText: text,
       normalizedText: text,
+      attachments,
       receivedAtMs: Date.now(),
     });
   }

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AGENT_PROVIDERS } from "@/shared/agent-provider";
+import { AGENT_PROVIDERS, normalizeAgentProviderId } from "@/shared/agent-provider";
 import { DEFAULT_STATUS_MESSAGE_FREQUENCY_MS } from "../status-message-frequency";
 import { GIT_STRATEGY_VALUES, STATUS_MESSAGE_FORMAT_VALUES } from "../baseConfig";
 
@@ -32,9 +32,6 @@ const agentsSchema = z.object({
   kimi: z.object({
     enabled: z.boolean().optional().default(true),
   }).optional().default({ enabled: true }),
-  kiro: z.object({
-    enabled: z.boolean().optional().default(true),
-  }).optional().default({ enabled: true }),
   kilo: z.object({
     enabled: z.boolean().optional().default(true),
     models: z.array(z.string()).optional().default([]),
@@ -43,9 +40,6 @@ const agentsSchema = z.object({
     enabled: z.boolean().optional().default(true),
   }).optional().default({ enabled: true }),
   goose: z.object({
-    enabled: z.boolean().optional().default(true),
-  }).optional().default({ enabled: true }),
-  gemini: z.object({
     enabled: z.boolean().optional().default(true),
   }).optional().default({ enabled: true }),
   pi: z.object({
@@ -69,11 +63,9 @@ const agentsSchema = z.object({
   claudecode: { enabled: true },
   codex: { enabled: true, models: [] },
   kimi: { enabled: true },
-  kiro: { enabled: true },
   kilo: { enabled: true, models: [] },
   qwen: { enabled: true },
   goose: { enabled: true },
-  gemini: { enabled: true },
   pi: { enabled: true, models: [] },
   openhands: { enabled: true, models: [] },
   codebuddy: { enabled: true, models: [] },
@@ -84,7 +76,7 @@ const channelDetailSchema = z.object({
   id: z.string(),
   name: z.string(),
   agentProvider: z.preprocess(
-    (value) => (value === "claude" ? "claudecode" : value),
+    (value) => normalizeAgentProviderId(value),
     agentProviderSchema.optional().default("opencode")
   ),
   model: z.string().optional().default(""),
@@ -104,7 +96,6 @@ const workspaceSchema = z.object({
   name: z.string().optional().default(""),
   domain: z.string().optional().default(""),
   status: z.enum(["active", "paused"]).optional().default("active"),
-  slackStatusMode: z.enum(["ai_card", "legacy"]).optional().default("ai_card"),
   channels: z.number().optional().default(0),
   members: z.number().optional().default(0),
   lastSync: z.string().optional().default(""),

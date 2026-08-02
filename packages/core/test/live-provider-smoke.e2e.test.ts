@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { createAgentAdapter } from "@/agents/adapter";
+import { createAgentInput } from "@/shared/agent-protocol";
 
 const runLive = process.env.RUN_LIVE_E2E === "1";
 
@@ -31,7 +32,7 @@ describe("live provider smoke e2e", () => {
     const responses = await adapter.sendMessage(
       channelId,
       session.sessionId,
-      "Reply with exactly LIVE_E2E_OK and nothing else.",
+      createAgentInput("Reply with exactly LIVE_E2E_OK and nothing else."),
       cwd,
       options
     );

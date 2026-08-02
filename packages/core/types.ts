@@ -3,6 +3,9 @@ import type {
   OpenCodeMessageContext,
   OpenCodeOptions,
   OpenCodeSessionInfo,
+  AgentInput,
+  AgentCapabilities,
+  AgentTransport,
 } from "@/agents";
 import type { StatusMessageFormat } from "@/config";
 import type { AgentProviderId } from "@/shared/agent-provider";
@@ -41,74 +44,9 @@ export type AgentStatusMessageParams = {
   statusMessageFormat: StatusMessageFormat;
 };
 
-/**
- * Chunk emitted by the status-stream renderer. Mirrors the shape of Slack's
- * `chat.appendStream` `chunks` payload, but kept platform-agnostic so other
- * IM adapters can choose their own rendering (or ignore it).
- *
- * - `task_update`: one tool / step card. `id` is a stable per-tool key, status
- *   transitions from `pending` → `in_progress` → `complete`/`error`.
- * - `plan_update`: rename the surrounding plan container (e.g. session title
- *   or phase label).
- * - `markdown_text`: free-form markdown chunk appended to the stream body.
- */
-export type StatusStreamChunk =
-  | {
-      type: "task_update";
-      id: string;
-      title: string;
-      status: "pending" | "in_progress" | "complete" | "error";
-      details?: string;
-      output?: string;
-      sources?: Array<{ type: "url"; text: string; url: string }>;
-    }
-  | { type: "plan_update"; title: string }
-  | { type: "markdown_text"; text: string };
-
 export interface IMAdapter {
   maxEditableMessageChars?: number;
   sendMessage(channelId: string, threadId: string, text: string): Promise<string | undefined>;
-  /**
-   * Optional. When implemented, the runtime uses Slack's (or equivalent)
-   * Streaming API to render live status updates — `task_update` /
-   * `plan_update` chunks render as animated task cards instead of repeated
-   * `chat.update` calls against a plain-text message.
-   *
-   * Channel (non-DM) streams on Slack require the requesting user's id and
-   * team id; pass them on `startStatusStream` and the adapter forwards.
-   *
-   * Lifecycle: `startStatusStream` once → many `appendStatusStream` calls →
-   * one `stopStatusStream` (or fall back to `updateMessage` if the stream
-   * was never started for this message TS).
-   *
-   * Slack-specific quirk: the stream is mode-locked to "chunks" at start;
-   * `appendStatusStream` / `stopStatusStream` cannot mix in plain markdown.
-   */
-  startStatusStream?(
-    channelId: string,
-    threadId: string,
-    opts: { recipientUserId: string; seedPlanTitle?: string }
-  ): Promise<string | undefined>;
-  appendStatusStream?(
-    channelId: string,
-    messageTs: string,
-    chunks: StatusStreamChunk[]
-  ): Promise<void>;
-  stopStatusStream?(channelId: string, messageTs: string): Promise<void>;
-  /**
-   * Optional. When present, the runtime calls this for ask_user-style prompts
-   * so the IM can render interactive UI (e.g. Slack buttons) when the options
-   * are simple enough. Implementations are free to fall back to plain text.
-   * `prefix` is an optional leading marker like "(1/2) " for multi-question
-   * flows.
-   */
-  sendQuestion?(
-    channelId: string,
-    threadId: string,
-    question: string,
-    options: string[] | undefined,
-    prefix?: string
-  ): Promise<string | undefined>;
   updateMessage(
     channelId: string,
     messageTs: string,
@@ -129,6 +67,8 @@ export interface AgentAdapter {
   supportsEventStream: boolean;
   getProviderForSession(sessionId: string): AgentProviderId;
   getDisplayNameForSession(sessionId: string): string;
+  getTransportForSession(sessionId: string): AgentTransport;
+  getCapabilitiesForSession(sessionId: string): AgentCapabilities;
   getOrCreateSession(
     channelId: string,
     threadId: string,
@@ -138,7 +78,7 @@ export interface AgentAdapter {
   sendMessage(
     channelId: string,
     sessionId: string,
-    message: string,
+    input: AgentInput,
     cwd: string,
     options?: OpenCodeOptions,
     context?: OpenCodeMessageContext

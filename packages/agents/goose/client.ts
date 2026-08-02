@@ -1,4 +1,5 @@
-import { setThreadSessionId } from "@/config/local/sessions";
+import { setThreadSessionId, updateThreadSessionBinding } from "@/config/local/sessions";
+import { LEGACY_AGENT_CAPABILITIES } from "@/shared/agent-protocol";
 import { BoundedSet, log } from "@/utils";
 import { buildPromptParts, buildPromptText, buildSystemPrompt, buildSystemWrappedPrompt } from "../shared";
 import {
@@ -9,7 +10,15 @@ import {
   type SessionEnvironment as RuntimeSessionEnvironment,
 } from "../runtime/base";
 import { createCliThreadSessionManager } from "../runtime/cli-session";
+import { inspectCliProtocol } from "../runtime/protocol-drift";
+import {
+  cancelAcpSession,
+  prependSystemPrompt,
+  sendMessageViaAcp,
+  stopAcpProvider,
+} from "../runtime/acp-client";
 import type {
+  AgentInput,
   OpenCodeMessage,
   OpenCodeMessageContext,
   OpenCodeOptions,
@@ -44,6 +53,7 @@ const runtime = new CliAgentRuntime("Goose");
 /** See note in claude/client.ts — FIFO-bounded so abandoned sessions don't leak. */
 const NEW_SESSIONS_MAX_ENTRIES = 1000;
 const newSessions = new BoundedSet<string>(NEW_SESSIONS_MAX_ENTRIES);
+const GOOSE_RECORD_TYPES = ["complete", "message", "assistant", "user", "result", "stream_event"];
 export const { createSession, getOrCreateSession } = createCliThreadSessionManager({
   providerId: "goose",
   providerName: "Goose",
@@ -93,12 +103,20 @@ function publishGooseRecordAsSessionEvents(record: GooseJsonRecord, fallbackSess
     : typeof record.role === "string" && record.role.trim()
       ? record.role.trim()
       : "unknown";
+  const streamEventType = typeof record.event?.type === "string" ? record.event.type : undefined;
   const eventPayload = {
     type: `goose.raw.${rawType}`,
     properties: {
       record,
       recordType: rawType,
-      streamEventType: typeof record.event?.type === "string" ? record.event.type : undefined,
+      streamEventType,
+      ...inspectCliProtocol({
+        providerName: "Goose",
+        recordType: rawType,
+        streamEventType,
+        knownRecordTypes: GOOSE_RECORD_TYPES,
+        anthropicStyleStream: true,
+      }),
     },
   };
   runtime.publishSessionEvent(sessionId, eventPayload);
@@ -199,10 +217,10 @@ export function parseGooseResponse(output: string): {
   return { text, sessionId };
 }
 
-export async function sendMessage(
+async function sendMessageViaCli(
   channelId: string,
   sessionId: string,
-  message: string,
+  input: AgentInput,
   workingPath: string,
   options?: OpenCodeOptions,
   context?: OpenCodeMessageContext
@@ -213,7 +231,7 @@ export async function sendMessage(
   try {
     return await runtime.withSessionLock(sessionKey, async () => {
       const agent = options?.agent;
-      const parts = buildPromptParts(channelId, message, { ...options, agent }, context);
+      const parts = buildPromptParts(channelId, input, { ...options, agent }, context);
       const prompt = buildPromptText(parts);
       const systemPrompt = buildSystemPrompt(context?.slack);
       const goosePrompt = buildSystemWrappedPrompt(systemPrompt, prompt);
@@ -267,13 +285,80 @@ export async function sendMessage(
   }
 }
 
+export async function sendMessage(
+  channelId: string,
+  sessionId: string,
+  input: AgentInput,
+  workingPath: string,
+  options?: OpenCodeOptions,
+  context?: OpenCodeMessageContext
+): Promise<OpenCodeMessage[]> {
+  const agent = options?.agent;
+  const promptParts = buildPromptParts(channelId, input, { ...options, agent }, context);
+  const systemPrompt = buildSystemPrompt(context?.slack);
+  const environment = runtime.getSessionEnvironment(sessionId);
+
+  return sendMessageViaAcp({
+    providerId: "goose",
+    providerName: "Goose",
+    launch: { command: resolveGooseBinary(), args: ["acp"] },
+    channelId,
+    sessionId,
+    isNewSession: newSessions.has(sessionId),
+    workingPath,
+    environment,
+    parts: prependSystemPrompt(promptParts, systemPrompt),
+    options,
+    publisher: runtime,
+    onNativeSessionId: (nativeSessionId) => {
+      runtime.setSessionEnvironment(nativeSessionId, environment);
+      newSessions.delete(sessionId);
+      newSessions.delete(nativeSessionId);
+      if (nativeSessionId !== sessionId && context?.slack?.threadId) {
+        setThreadSessionId(channelId, context.slack.threadId, nativeSessionId);
+      }
+    },
+    onNegotiated: ({ protocolVersion, capabilities }) => {
+      if (context?.slack?.threadId) {
+        updateThreadSessionBinding(channelId, context.slack.threadId, {
+          transport: "acp",
+          protocolVersion,
+          capabilities,
+        });
+      }
+    },
+    onFallback: () => {
+      if (context?.slack?.threadId) {
+        updateThreadSessionBinding(channelId, context.slack.threadId, {
+          transport: "cli-json",
+          protocolVersion: undefined,
+          capabilities: LEGACY_AGENT_CAPABILITIES,
+        });
+      }
+    },
+    fallback: () => sendMessageViaCli(channelId, sessionId, input, workingPath, options, context),
+  });
+}
+
 export const ensureSession = runtime.ensureSession.bind(runtime);
 
 export const subscribeToSession = runtime.subscribeToSession.bind(runtime);
 
-export const abortSession = runtime.abortSession.bind(runtime);
+export async function abortSession(sessionId: string): Promise<void> {
+  await cancelAcpSession("goose", sessionId).catch(() => false);
+  await runtime.abortSession(sessionId);
+}
 
-export const cancelActiveRequest = runtime.cancelActiveRequest.bind(runtime);
+export async function cancelActiveRequest(channelId: string, sessionId: string): Promise<boolean> {
+  const [acpCancelled, cliCancelled] = await Promise.all([
+    cancelAcpSession("goose", sessionId).catch(() => false),
+    runtime.cancelActiveRequest(channelId, sessionId),
+  ]);
+  return acpCancelled || cliCancelled;
+}
 
-export const stopServer = runtime.stopServer.bind(runtime);
+export function stopServer(): void {
+  stopAcpProvider("goose");
+  runtime.stopServer();
+}
 export const startServer = noopStartServer;

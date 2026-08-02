@@ -149,12 +149,7 @@ function normalizeConfig(input: DashboardConfig): DashboardConfig {
     updates: {
       autoUpgrade: input.updates?.autoUpgrade !== false,
     },
-    workspaces: (input.workspaces ?? []).map((workspace) => ({
-      ...workspace,
-      slackStatusMode: workspace.type === "slack" && workspace.slackStatusMode === "legacy"
-        ? "legacy"
-        : "ai_card",
-    })),
+    workspaces: input.workspaces ?? [],
     agents: {
       opencode: {
         enabled: input.agents?.opencode?.enabled ?? true,
@@ -170,9 +165,6 @@ function normalizeConfig(input: DashboardConfig): DashboardConfig {
       kimi: {
         enabled: input.agents?.kimi?.enabled ?? true,
       },
-      kiro: {
-        enabled: input.agents?.kiro?.enabled ?? true,
-      },
       kilo: {
         enabled: input.agents?.kilo?.enabled ?? true,
         models: input.agents?.kilo?.models ?? [],
@@ -182,9 +174,6 @@ function normalizeConfig(input: DashboardConfig): DashboardConfig {
       },
       goose: {
         enabled: input.agents?.goose?.enabled ?? true,
-      },
-      gemini: {
-        enabled: input.agents?.gemini?.enabled ?? true,
       },
       pi: {
         enabled: input.agents?.pi?.enabled ?? true,
@@ -429,10 +418,6 @@ function updateConfigWithAgentCheckResult(config: DashboardConfig, result: CliCh
         ...config.agents.kimi,
         enabled: result.kimi ?? config.agents.kimi.enabled,
       },
-      kiro: {
-        ...config.agents.kiro,
-        enabled: result.kiro ?? config.agents.kiro.enabled,
-      },
       kilo: {
         ...config.agents.kilo,
         enabled: result.kilo ?? config.agents.kilo.enabled,
@@ -445,10 +430,6 @@ function updateConfigWithAgentCheckResult(config: DashboardConfig, result: CliCh
       goose: {
         ...config.agents.goose,
         enabled: result.goose ?? config.agents.goose.enabled,
-      },
-      gemini: {
-        ...config.agents.gemini,
-        enabled: result.gemini ?? config.agents.gemini.enabled,
       },
       pi: {
         ...config.agents.pi,

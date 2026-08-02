@@ -36,7 +36,6 @@ describe("live status renderer is stable under event truncation", () => {
   const fixtures = [
     "claude-basic-run.json",
     "codex-basic-run.json",
-    "kiro-basic-run.json",
     "kilo-basic-run.json",
     "qwen-basic-run.json",
     "goose-basic-run.json",

@@ -1,4 +1,4 @@
-export { uploadSlackFile, getSlackThreadMessages, addSlackReaction, postSlackQuestion } from "./slack/api";
+export { uploadSlackFile, getSlackThreadMessages, addSlackReaction } from "./slack/api";
 export * from "./discord";
 export * from "./lark";
 export {

@@ -16,9 +16,21 @@ type ToolBlock = {
   name?: string;
   input?: Record<string, unknown>;
   tool_use_id?: string;
-  content?: string;
+  content?: unknown;
   is_error?: boolean;
 };
+
+function extractToolResultText(content: unknown): string | undefined {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return undefined;
+  const text = content
+    .filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object" && !Array.isArray(entry))
+    .filter((entry) => entry.type === "text" && typeof entry.text === "string")
+    .map((entry) => String(entry.text))
+    .join("\n")
+    .trim();
+  return text || undefined;
+}
 
 export type StreamToolState = SessionTool & {
   inputBuffer?: string;
@@ -162,7 +174,7 @@ export function buildToolTitle(
     return firstStringValue(input, ["pattern", "path", "glob", "directory"]);
   }
 
-  if (normalized === "agent" || normalized.includes("task")) {
+  if (normalized === "agent" || normalized === "subagent" || normalized.includes("task")) {
     const description = firstStringValue(input, ["description", "prompt", "task", "message"]);
     return description ? compactSingleLine(description) : undefined;
   }
@@ -182,6 +194,9 @@ export function extractSessionTitle(value: unknown): string | undefined {
     const trimmed = candidate.trim();
     if (!trimmed) return undefined;
     if (trimmed.startsWith("New session")) return undefined;
+    if (trimmed.startsWith("<system-prompt>") || trimmed.startsWith("ODE RUNTIME CONTEXT:")) {
+      return undefined;
+    }
     return trimmed;
   };
 
@@ -233,7 +248,8 @@ export function applyAssistantBlocks<TTool extends StreamToolState>(
   state: SessionMessageState,
   blocks: ToolBlock[],
   streamState: Pick<StreamStateMaps<TTool>, "toolById">,
-  toolPrefix: string
+  toolPrefix: string,
+  options: { startedAtMs?: number } = {}
 ): void {
   const { toolById } = streamState;
   const text = blocks
@@ -269,8 +285,13 @@ export function applyAssistantBlocks<TTool extends StreamToolState>(
       output: existing?.output,
       error: existing?.error,
       title: buildToolTitle(toolName, input ?? existing?.input) ?? existing?.title,
-      metadata: existing?.metadata,
-    } as TTool;
+      metadata: {
+        ...(existing?.metadata ?? {}),
+        startedAtMs: typeof existing?.metadata?.startedAtMs === "number"
+          ? existing.metadata.startedAtMs
+          : options.startedAtMs ?? Date.now(),
+      },
+    } as unknown as TTool;
     const parsedTodos = parseTodosFromToolInput(toolName, input);
     if (parsedTodos) {
       state.todos = parsedTodos;
@@ -301,7 +322,7 @@ export function applyUserToolResults<TTool extends StreamToolState>(
     if (!existing) continue;
 
     const hasError = block.is_error === true;
-    const output = typeof block.content === "string" ? block.content : undefined;
+    const output = extractToolResultText(block.content);
     const updated = {
       ...existing,
       status: hasError ? "error" : "completed",
@@ -319,7 +340,8 @@ export function applyAnthropicStyleStreamEvent<TTool extends StreamToolState>(
   state: SessionMessageState,
   record: StreamEventRecord,
   streamState: StreamStateMaps<TTool>,
-  toolPrefix: string
+  toolPrefix: string,
+  options: { completeToolOnContentBlockStop?: boolean; startedAtMs?: number } = {}
 ): boolean {
   if (!record || !record.event?.type) return false;
   const { textByIndex, thinkingByIndex, toolByIndex, toolById } = streamState;
@@ -328,6 +350,15 @@ export function applyAnthropicStyleStreamEvent<TTool extends StreamToolState>(
 
   switch (eventType) {
     case "message_start": {
+      // Content block indexes are scoped to one assistant message. Claude
+      // restarts them at zero after a tool result, so retaining the previous
+      // message's index maps can incorrectly resurrect a completed tool when
+      // the final text block stops.
+      textByIndex.clear();
+      thinkingByIndex.clear();
+      toolByIndex.clear();
+      state.currentText = "";
+      state.thinkingText = undefined;
       state.phaseStatus = "Thinking";
       return true;
     }
@@ -351,7 +382,8 @@ export function applyAnthropicStyleStreamEvent<TTool extends StreamToolState>(
           status: "running",
           input,
           title: buildToolTitle(toolName, input),
-        } as TTool;
+          metadata: { startedAtMs: options.startedAtMs ?? Date.now() },
+        } as unknown as TTool;
         const parsedTodos = parseTodosFromToolInput(toolName, input);
         if (parsedTodos) {
           state.todos = parsedTodos;
@@ -451,6 +483,14 @@ export function applyAnthropicStyleStreamEvent<TTool extends StreamToolState>(
         state.phaseStatus = "Finished step";
         return true;
       }
+      if (options.completeToolOnContentBlockStop === false) {
+        tool.status = "running";
+        toolById.set(tool.id, tool);
+        toolByIndex.set(index, tool);
+        updateTool(state, tool);
+        state.phaseStatus = tool.title ? `Running tool: ${tool.name} - ${tool.title}` : `Running tool: ${tool.name}`;
+        return true;
+      }
       tool.status = "completed";
       toolById.set(tool.id, tool);
       toolByIndex.set(index, tool);
@@ -459,7 +499,15 @@ export function applyAnthropicStyleStreamEvent<TTool extends StreamToolState>(
       return true;
     }
     case "message_stop": {
-      state.phaseStatus = "Finalizing response";
+      const runningTool = [...state.tools]
+        .reverse()
+        .find((tool) => tool.status === "running" || tool.status === "pending");
+      if (runningTool) {
+        const detail = runningTool.title ? `${runningTool.name} - ${runningTool.title}` : runningTool.name;
+        state.phaseStatus = `Running tool: ${detail}`;
+      } else {
+        state.phaseStatus = "Finalizing response";
+      }
       return true;
     }
     default:
