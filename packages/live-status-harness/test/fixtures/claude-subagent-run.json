@@ -1,0 +1,130 @@
+{
+  "meta": {
+    "runId": "claude_subagent_fixture",
+    "provider": "claudecode",
+    "prompt": "fixed",
+    "promptHash": "hash",
+    "cwd": "/tmp/repo",
+    "channelId": "C_TEST",
+    "threadId": "T_TEST",
+    "sessionId": "claude-root",
+    "startedAt": 1700000000000,
+    "eventCount": 5
+  },
+  "events": [
+    {
+      "runId": "claude_subagent_fixture",
+      "sessionId": "claude-root",
+      "provider": "claudecode",
+      "timestamp": 1700000000000,
+      "index": 0,
+      "event": {
+        "type": "claude.raw.assistant",
+        "properties": {
+          "record": {
+            "type": "assistant",
+            "message": {
+              "content": [{
+                "type": "tool_use",
+                "id": "call_agent_1",
+                "name": "Agent",
+                "input": {
+                  "description": "Read package metadata",
+                  "prompt": "Read package.json"
+                }
+              }]
+            },
+            "parent_tool_use_id": null
+          }
+        }
+      }
+    },
+    {
+      "runId": "claude_subagent_fixture",
+      "sessionId": "claude-root",
+      "provider": "claudecode",
+      "timestamp": 1700000001000,
+      "index": 1,
+      "event": {
+        "type": "claude.raw.system",
+        "properties": {
+          "record": {
+            "type": "system",
+            "subtype": "task_started",
+            "task_id": "task_1",
+            "tool_use_id": "call_agent_1",
+            "description": "Read package metadata",
+            "subagent_type": "general-purpose"
+          }
+        }
+      }
+    },
+    {
+      "runId": "claude_subagent_fixture",
+      "sessionId": "claude-root",
+      "provider": "claudecode",
+      "timestamp": 1700000002000,
+      "index": 2,
+      "event": {
+        "type": "claude.raw.assistant",
+        "properties": {
+          "record": {
+            "type": "assistant",
+            "parent_tool_use_id": "call_agent_1",
+            "task_description": "Read package metadata",
+            "message": {
+              "content": [{
+                "type": "tool_use",
+                "id": "child_read",
+                "name": "Read",
+                "input": { "file_path": "/tmp/repo/package.json" }
+              }]
+            }
+          }
+        }
+      }
+    },
+    {
+      "runId": "claude_subagent_fixture",
+      "sessionId": "claude-root",
+      "provider": "claudecode",
+      "timestamp": 1700000003000,
+      "index": 3,
+      "event": {
+        "type": "claude.raw.system",
+        "properties": {
+          "record": {
+            "type": "system",
+            "subtype": "task_progress",
+            "task_id": "task_1",
+            "tool_use_id": "call_agent_1",
+            "description": "Reading package.json",
+            "summary": "Checking package metadata",
+            "last_tool_name": "Read",
+            "usage": { "total_tokens": 20, "tool_uses": 1, "duration_ms": 3000 }
+          }
+        }
+      }
+    },
+    {
+      "runId": "claude_subagent_fixture",
+      "sessionId": "claude-root",
+      "provider": "claudecode",
+      "timestamp": 1700000004000,
+      "index": 4,
+      "event": {
+        "type": "claude.raw.system",
+        "properties": {
+          "record": {
+            "type": "system",
+            "subtype": "task_notification",
+            "task_id": "task_1",
+            "tool_use_id": "call_agent_1",
+            "status": "completed",
+            "summary": "ode 0.2.0"
+          }
+        }
+      }
+    }
+  ]
+}

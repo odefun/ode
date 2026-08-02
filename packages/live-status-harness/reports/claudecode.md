@@ -73,11 +73,9 @@ packages/utils/parsers/
 ├── opencode-parser.ts
 ├── codex-parser.ts
 ├── kimi-parser.ts
-├── kiro-parser.ts
 ├── kilo-parser.ts
 ├── qwen-parser.ts
-├── goose-parser.ts
-└── gemini-parser.ts
+└── goose-parser.ts
 ` ` `
 
 Each parser only handles its own event format, making it easy to test and modify.

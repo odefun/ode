@@ -3,11 +3,14 @@ import { getChannelAgentProvider } from "@/config";
 import type { QuestionInfo } from "@opencode-ai/sdk/v2";
 import { getAgentProviderLabel } from "@/shared/agent-provider";
 import { getAgentProvider, type AgentProviderId } from "./registry";
-import { getSessionClient } from "./opencode";
+import { getSessionClient, replyToOpenCodePermission } from "./opencode";
 import { replyToQuestion as replyToClaudeQuestion } from "./claude";
+import { replyToQuestion as replyToCodexQuestion } from "./codex";
+import { replyToAcpQuestion } from "./runtime/acp-client";
 import {
   buildStatusMessageByProvider,
 } from "@/utils/status";
+import { getAgentCapabilities, getAgentTransport } from "./capabilities";
 
 /**
  * Session → provider index. Intentionally unbounded: this map is used by
@@ -62,6 +65,12 @@ export function createAgentAdapter(options: AgentAdapterOptions = {}): AgentAdap
       const providerId = getProviderForSession(sessionId);
       return getAgentProviderLabel(providerId);
     },
+    getTransportForSession(sessionId) {
+      return getAgentTransport(getProviderForSession(sessionId));
+    },
+    getCapabilitiesForSession(sessionId) {
+      return getAgentCapabilities(getProviderForSession(sessionId));
+    },
     async getOrCreateSession(channelId, threadId, cwd, env) {
       const providerId = resolveProviderForChannel(channelId);
       const provider = getAgentProvider(providerId);
@@ -101,8 +110,19 @@ export function createAgentAdapter(options: AgentAdapterOptions = {}): AgentAdap
         await replyToClaudeQuestion({ sessionId, requestId, answers });
         return;
       }
+      if (providerId === "codex") {
+        await replyToCodexQuestion({ requestId, answers });
+        return;
+      }
+      if (providerId === "kimi" || providerId === "kilo" || providerId === "goose" || providerId === "codebuddy") {
+        await replyToAcpQuestion({ providerId, sessionId, requestId, answers });
+        return;
+      }
       if (providerId !== "opencode") {
         throw new Error(`Question replies are not supported for agent: ${providerId}`);
+      }
+      if (await replyToOpenCodePermission({ sessionId, requestId, answers })) {
+        return;
       }
       const client = await getSessionClient(sessionId);
       const response = await client.question.reply({

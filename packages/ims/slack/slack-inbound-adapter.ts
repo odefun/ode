@@ -13,6 +13,7 @@ export class SlackInboundAdapter implements InboundAdapter {
       mentionedBot: event.mentionedBot,
       activeThread: event.activeThread,
       normalizedText: event.normalizedText,
+      attachments: event.attachments,
     });
   }
 }

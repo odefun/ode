@@ -1,4 +1,5 @@
 import type { BotPlatform } from "@/core/model/bot-key";
+import type { InboundAttachment } from "@/shared/agent-protocol";
 
 export type RawInboundEvent = Readonly<{
   platform: BotPlatform;
@@ -17,5 +18,6 @@ export type RawInboundEvent = Readonly<{
   activeThread: boolean;
   rawText: string;
   normalizedText: string;
+  attachments?: readonly InboundAttachment[];
   receivedAtMs: number;
 }>;

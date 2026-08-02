@@ -8,7 +8,7 @@ ODE is a project that connects many AI coding agents with IM message apps. When 
 - Config: `packages/config/` (Zod env/config validation, local `ode.json`, channel settings)
 - Core orchestration: `packages/core/` (daemon, kernel, runtime, tasks, cron, Web/API server)
 - IM adapters: `packages/ims/` (`slack`, `discord`, `lark`, shared inbound/delivery/runtime helpers)
-- Agent adapters: `packages/agents/` (`opencode`, `claude`, `codex`, `kimi`, `kiro`, `kilo`, `qwen`, `goose`, `gemini`, `pi`, `openhands`, `codebuddy`, `crush`)
+- Agent adapters: `packages/agents/` (`opencode`, `claude`, `codex`, `kimi`, `kilo`, `qwen`, `goose`, `pi`, `openhands`, `codebuddy`, `crush`)
 - Shared utilities: `packages/shared/` and `packages/utils/`
 - Web UI: `packages/web-ui/` (settings, sessions, local config views)
 - Live status harness: `packages/live-status-harness/`
@@ -20,6 +20,7 @@ ODE is a project that connects many AI coding agents with IM message apps. When 
 - Sessions live under `~/.config/ode/sessions/`.
 - Channel details include agent provider, model when supported, working directory, base branch, and system message.
 - Bot replies and status updates should stay in the originating IM thread.
+- Runtime status and final replies use ordinary Markdown text messages on Slack, Discord, and Lark; do not reintroduce Slack AI Card/streaming message formatting.
 - Status updates include phases, tool progress, elapsed time, and are preserved as an operation record.
 - Slack workspaces default to AI card status messages; use the workspace Status Messages setting to switch a Slack workspace back to legacy message updates.
 - SDK/CLI event loops handle permission or question flows where supported; OpenCode and Claude question replies are wired through the adapter.
@@ -29,9 +30,11 @@ ODE is a project that connects many AI coding agents with IM message apps. When 
 
 ## Supported Integrations
 - IM apps: Slack, Discord, Lark/Feishu.
-- Agent providers: `opencode`, `claude`/`claudecode`, `codex`, `kimi`, `kiro`, `kilo`, `qwen`, `goose`, `gemini`, `pi`, `openhands`, `codebuddy`, `crush`.
+- Agent providers: `opencode`, `claude`/`claudecode`, `codex`, `kimi`, `kilo`, `qwen`, `goose`, `pi`, `openhands`, `codebuddy`, `crush`.
 - Model selection is provider-specific. OpenCode, Codex, Kilo, Pi, OpenHands, CodeBuddy, and Crush expose configured model lists in the Web UI.
 - Coding agent credentials/configuration belong to each agent's own CLI/config files; Ode should call the CLI and should not become the secret/config owner for those tools.
+- Structured transports are preferred where locally supported: OpenCode SDK, Claude Agent SDK streaming input, Codex App Server, and ACP for Kimi/Kilo/Goose. Keep a CLI fallback when protocol startup is unavailable.
+- Inbound images/files are downloaded by the IM adapter into Ode's private attachment store and passed as `AgentInputPart`; never pass expiring IM URLs or IM authorization headers to agent providers.
 
 ## Commands
 - Install deps: `bun run setup`
@@ -98,14 +101,14 @@ ODE is a project that connects many AI coding agents with IM message apps. When 
 - Prefer `Bun.file` over `node:fs` for new file IO where practical, while respecting existing local style.
 
 ## Skills
-- Available repo skills include `agent-browser`, `slack-developer-researcher`, `opencode-developer-researcher`, `codex-cli-reference`, `qwen-code-skill`, `goose-cli-skill`, `kimi-cli-skill`, `kiro-cli-skill`, and `kilo-cli-skill`.
+- Available repo skills include `agent-browser`, `slack-developer-researcher`, `opencode-developer-researcher`, `codex-cli-reference`, `qwen-code-skill`, `goose-cli-skill`, `kimi-cli-skill`, and `kilo-cli-skill`.
 - Use `agent-browser` for browser automation tasks.
 - Use the matching CLI skill when changing or debugging an agent provider integration.
 - If you discover new Slack/OpenCode/CLI-agent updates during development, update the matching skill doc under `.agents/skills/` (mirrored via `.claude/skills/` when present).
 
 ## Agent Live Status Workflow
 - Use `packages/live-status-harness/fixed-prompt.md` as the baseline stream-capture prompt.
-- Capture stream events with `bun run live-status:capture --provider <opencode|claudecode|codex|kimi|kiro|kilo|qwen|goose|gemini|pi|openhands|codebuddy|crush>`.
+- Capture stream events with `bun run live-status:capture --provider <opencode|claudecode|codex|kimi|kilo|qwen|goose|pi|openhands|codebuddy|crush>`.
 - Store raw ordered events in Redis under the harness keyspace (`harness:live_status:*`).
 - Render status outputs from captured events with `bun run live-status:render --run-id <runId>`.
 - Generate combined reports with `bun run live-status:report`.

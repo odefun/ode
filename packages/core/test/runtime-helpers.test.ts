@@ -99,6 +99,15 @@ describe("runtime helpers", () => {
     expect(result.suggestion).toContain("Wait a moment");
   });
 
+  it("categorizes stale OpenCode prompts as recoverable idle runs", () => {
+    const error = new Error("OpenCode stopped reporting progress");
+    error.name = "OpenCodeIdlePromptError";
+    expect(categorizeRuntimeError(error)).toEqual({
+      message: "OpenCode run became idle before completing",
+      suggestion: "Ode stopped the stale run. Retry in the same thread; a new turn can reuse the session history.",
+    });
+  });
+
   describe("hasSimpleOptions", () => {
     it("accepts 2-5 short options", () => {
       expect(hasSimpleOptions(["yes", "no"])).toBe(true);

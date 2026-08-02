@@ -33,16 +33,42 @@ describe("live status harness renderer", () => {
     expect(joined).toContain("Drafting response");
   });
 
-  it("renders kiro busy to idle live status from fixture", async () => {
-    const fixtureFile = Bun.file(`${import.meta.dir}/fixtures/kiro-basic-run.json`);
+  it("keeps Codex child output scoped to its subagent", async () => {
+    const fixtureFile = Bun.file(`${import.meta.dir}/fixtures/codex-app-subagent-run.json`);
+    const fixture = JSON.parse(await fixtureFile.text()) as FixtureShape;
+
+    const statuses = renderStatusesFromRun(fixture.meta, fixture.events);
+    const joined = statuses.map((status) => status.text).join("\n\n");
+    const final = statuses.at(-1)?.text ?? "";
+
+    expect(joined).toContain("`subagent` package_identity");
+    expect(final).toContain("The package is ode, version 0.2.0.");
+    expect(final).not.toContain("**Latest output**\node 0.2.0");
+  });
+
+  it("renders Claude task progress without flattening child tools", async () => {
+    const fixtureFile = Bun.file(`${import.meta.dir}/fixtures/claude-subagent-run.json`);
     const fixture = JSON.parse(await fixtureFile.text()) as FixtureShape;
 
     const statuses = renderStatusesFromRun(fixture.meta, fixture.events);
     const joined = statuses.map((status) => status.text).join("\n\n");
 
-    expect(statuses.length).toBeGreaterThanOrEqual(2);
-    expect(joined).toContain("Working");
-    expect(joined).toContain("Waiting");
+    expect(joined).toContain("Waiting for subagent: Read package metadata — Checking package metadata");
+    expect(joined).toContain("`subagent` Read package metadata");
+    expect(joined).not.toContain("`Read` package.json");
+    expect(joined).toContain("Finished subagent: Read package metadata");
+  });
+
+  it("renders OpenCode child-session progress from normalized sync events", async () => {
+    const fixtureFile = Bun.file(`${import.meta.dir}/fixtures/opencode-child-sync-run.json`);
+    const fixture = JSON.parse(await fixtureFile.text()) as FixtureShape;
+
+    const statuses = renderStatusesFromRun(fixture.meta, fixture.events);
+    const joined = statuses.map((status) => status.text).join("\n\n");
+
+    expect(joined).toContain("Waiting for subagent: Audit repository docs");
+    expect(joined).toContain("~ `read`");
+    expect(joined).toContain("- `task` Audit repository docs");
   });
 
   it("renders kilo live status from fixture", async () => {
@@ -157,61 +183,6 @@ describe("live status harness renderer", () => {
     expect(joined).toContain("Finished tool: subagent");
   });
 
-  it("renders gemini live status from synthetic fixture", () => {
-    const now = Date.now();
-    const meta: HarnessRunMeta = {
-      runId: "run-gemini-test",
-      provider: "gemini",
-      prompt: "test",
-      promptHash: "hash",
-      cwd: "/tmp/repo",
-      channelId: "C1",
-      threadId: "T1",
-      sessionId: "gemini_s1",
-      startedAt: now,
-      eventCount: 3,
-    };
-    const events: HarnessCapturedEvent[] = [
-      {
-        runId: "run-gemini-test",
-        sessionId: "gemini_s1",
-        provider: "gemini",
-        timestamp: now,
-        index: 0,
-        event: { type: "gemini.raw.init", properties: { record: { type: "init" } } },
-      },
-      {
-        runId: "run-gemini-test",
-        sessionId: "gemini_s1",
-        provider: "gemini",
-        timestamp: now + 1,
-        index: 1,
-        event: {
-          type: "gemini.raw.tool_use",
-          properties: { record: { type: "tool_use", tool_name: "read_file", tool_id: "tool-1" } },
-        },
-      },
-      {
-        runId: "run-gemini-test",
-        sessionId: "gemini_s1",
-        provider: "gemini",
-        timestamp: now + 2,
-        index: 2,
-        event: {
-          type: "gemini.raw.message",
-          properties: { record: { type: "message", role: "assistant", content: "Done", delta: true } },
-        },
-      },
-    ];
-
-    const statuses = renderStatusesFromRun(meta, events);
-    const joined = statuses.map((status) => status.text).join("\n\n");
-
-    expect(statuses.length).toBeGreaterThanOrEqual(2);
-    expect(joined).toContain("Gemini is running...");
-    expect(joined).toContain("Running tool: read_file");
-  });
-
   it("renders todos and waiting status from wrapped payload events", () => {
     const now = Date.now();
     const meta: HarnessRunMeta = {
@@ -314,8 +285,8 @@ describe("live status harness renderer", () => {
     const statuses = renderStatusesFromRun(meta, events);
     const finalText = statuses[statuses.length - 1]?.text || "";
 
-    expect(finalText).toContain("*Tasks*");
+    expect(finalText).toContain("**Plan**");
     expect(finalText).toContain("- [~] Verify harness parser");
-    expect(finalText).toContain("_Waiting_");
+    expect(finalText).toContain("*Waiting*");
   });
 });

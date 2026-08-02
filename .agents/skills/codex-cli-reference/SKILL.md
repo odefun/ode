@@ -18,6 +18,7 @@ Use this when you need to:
 - `--sandbox, -s <mode>`: set command sandbox (`read-only`, `workspace-write`, `danger-full-access`).
 - `--ask-for-approval, -a <policy>`: control approval behavior (`untrusted`, `on-failure`, `on-request`, `never`).
 - `--full-auto`: shorthand for lower-friction automation (`on-request` + `workspace-write`).
+- `--dangerously-bypass-approvals-and-sandbox`: current explicit unattended `exec` flag; prefer it over the hidden legacy `--yolo` alias when Ode already provides the external isolation boundary.
 - `-c, --config key=value`: one-off config override for the invocation.
 
 ## Common examples

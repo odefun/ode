@@ -206,9 +206,6 @@ async function runProvider(
 
   if (!reusedRun && !options.runId) {
     const captureArgs = ["--provider", provider, "--run-id", runId, "--cwd", options.cwd];
-    if (provider === "gemini") {
-      captureArgs.push("--agent", "plan");
-    }
     if (provider === "codebuddy") {
       captureArgs.push("--model", "codebuddy/gpt-5.1");
     }

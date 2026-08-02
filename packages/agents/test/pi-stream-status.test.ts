@@ -96,4 +96,31 @@ describe("pi stream status parsing", () => {
     expect(text).toContain("Tool execution");
     expect(text).toContain("`find` *.ts");
   });
+
+  it("tracks Pi 0.83 tool execution lifecycle records", () => {
+    const now = Date.now();
+    const state = buildSessionMessageState([
+      rawEvent(now, {
+        type: "tool_execution_start",
+        toolCallId: "tool-3",
+        toolName: "read",
+        args: { path: "/tmp/repo/package.json" },
+      }),
+      rawEvent(now + 1, {
+        type: "tool_execution_end",
+        toolCallId: "tool-3",
+        toolName: "read",
+        result: { content: [{ type: "text", text: "version 0.2.0" }], isError: false },
+      }),
+    ]);
+
+    expect(state.tools[0]).toMatchObject({
+      id: "tool-3",
+      name: "read",
+      status: "completed",
+      title: "/tmp/repo/package.json",
+      output: "version 0.2.0",
+    });
+    expect(state.phaseStatus).toBe("Finished tool: read - /tmp/repo/package.json");
+  });
 });

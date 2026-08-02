@@ -620,89 +620,8 @@ function createSlackAdapter(processorId?: string): IMAdapter {
     maxEditableMessageChars: 35_000,
     sendMessage: (channelId: string, threadId: string, text: string) =>
       sendMessage(channelId, threadId, text, processorId),
-    sendQuestion: async (
-      channelId: string,
-      threadId: string,
-      question: string,
-      options: string[] | undefined,
-      prefix?: string
-    ) => {
-      const token = getSlackBotTokenForProcessor(processorId) ?? getSlackBotToken(channelId, threadId);
-      if (!token) {
-        // No token -> fall through to plain-text sendMessage so the question
-        // still gets delivered through whatever channel/path the caller has.
-        const optionText = options && options.length > 0 ? `\nOptions: ${options.join(" / ")}` : "";
-        return sendMessage(channelId, threadId, `${prefix ?? ""}${question}${optionText}`, processorId);
-      }
-      const { postSlackQuestion } = await import("./api");
-      return postSlackQuestion({
-        channelId,
-        threadId,
-        question,
-        options,
-        prefix,
-        token,
-      });
-    },
     updateMessage: (channelId: string, messageTs: string, text: string) =>
       updateMessage(channelId, messageTs, text, processorId),
-    startStatusStream: async (channelId, threadId, opts) => {
-      // Resolve recipient_team_id + bot token together so append/stop can
-      // use the same identity by reading the token back from the
-      // message-bot-token registry (see setMessageBotToken below).
-      const botToken = getSlackBotTokenForProcessor(processorId)
-        ?? getSlackBotToken(channelId, threadId);
-      if (!botToken) {
-        log.warn("No Slack bot token available for channel; cannot start stream", { channelId });
-        return undefined;
-      }
-      const auth = slackAuthRegistry.resolveWorkspaceAuth(botToken);
-      const recipientTeamId = auth?.teamId ?? undefined;
-      if (!recipientTeamId) {
-        log.warn("No team id resolved for channel; cannot start Slack stream", { channelId });
-        return undefined;
-      }
-      const { startSlackStream } = await import("./api");
-      const ts = await startSlackStream({
-        channelId,
-        threadId,
-        recipientUserId: opts.recipientUserId,
-        recipientTeamId,
-        seedPlanTitle: opts.seedPlanTitle,
-        token: botToken,
-      });
-      if (ts) {
-        // Bind the bot token to the streamed TS so future
-        // appendStatusStream / stopStatusStream calls resolve the SAME
-        // workspace token via getMessageBotToken — multi-workspace installs
-        // would otherwise risk mixing identities and getting silent
-        // rejections from Slack mid-stream.
-        slackAuthRegistry.setMessageBotToken(channelId, ts, botToken);
-      }
-      return ts;
-    },
-    appendStatusStream: async (channelId, messageTs, chunks) => {
-      const token = slackAuthRegistry.getMessageBotToken(channelId, messageTs)
-        ?? getSlackBotTokenForProcessor(processorId)
-        ?? getSlackBotToken(channelId);
-      if (!token) {
-        log.warn("No Slack bot token available for stream append", { channelId, messageTs });
-        return;
-      }
-      const { appendSlackStream } = await import("./api");
-      await appendSlackStream({ channelId, messageTs, chunks, token });
-    },
-    stopStatusStream: async (channelId, messageTs) => {
-      const token = slackAuthRegistry.getMessageBotToken(channelId, messageTs)
-        ?? getSlackBotTokenForProcessor(processorId)
-        ?? getSlackBotToken(channelId);
-      if (!token) {
-        log.warn("No Slack bot token available for stream stop", { channelId, messageTs });
-        return;
-      }
-      const { stopSlackStream } = await import("./api");
-      await stopSlackStream({ channelId, messageTs, token });
-    },
     cancelPendingUpdates: (channelId: string, messageTs: string) =>
       slackMessageUpdateManager.cancelPendingUpdates(channelId, messageTs),
     markMessageFinalized: (channelId: string, messageTs: string) =>

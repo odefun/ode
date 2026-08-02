@@ -12,6 +12,7 @@ description: Reference guide for integrating and operating Goose CLI in Ode, foc
 Use this when adding or debugging Ode's `goose` provider, especially command construction, session resume behavior, and stream-event parsing for live status.
 
 ## Recommended invocation pattern
+- Preferred Ode integration: `goose acp`, using ACP over stdio.
 - Non-interactive run: `goose run --output-format stream-json --name <sessionName> -t <prompt>`
 - Resume existing run session: `goose run --output-format stream-json --name <sessionName> --resume -t <prompt>`
 - Open Goose web UI session: `goose web --open`
@@ -31,6 +32,8 @@ Use this when adding or debugging Ode's `goose` provider, especially command con
 - Use `stream-json` output so live status can consume incremental events.
 - Session IDs can be represented by a stable session name in Ode (`--name`) and resumed with `--resume`.
 - Goose stores sessions in local storage (SQLite-backed in recent versions), so CLI and Desktop/Web can share context.
+- Prefer ACP for native session IDs, cancellation, attachments, and structured updates. Use `goose run --output-format stream-json` only as the compatibility fallback.
+- Route ACP `session/request_permission` back to the originating user and wait for an explicit option; cancellation must resolve a pending permission as cancelled.
 
 ## Sources
 - https://block.github.io/goose/docs/guides/sessions/session-management

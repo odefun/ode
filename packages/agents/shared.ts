@@ -1,4 +1,5 @@
-import type { OpenCodeMessageContext, OpenCodeOptions, PromptPart, SlackContext } from "./types";
+import type { AgentInput, OpenCodeMessageContext, OpenCodeOptions, PromptPart, SlackContext } from "./types";
+import { renderAgentInputAsText } from "@/shared/agent-protocol";
 
 export function buildSystemPrompt(slack?: SlackContext): string {
   if (!slack) return "";
@@ -33,7 +34,7 @@ export function buildSystemPrompt(slack?: SlackContext): string {
 
 export function buildPromptParts(
   _channelId: string,
-  message: string,
+  input: AgentInput,
   _options?: OpenCodeOptions,
   context?: OpenCodeMessageContext
 ): PromptPart[] {
@@ -46,13 +47,13 @@ export function buildPromptParts(
     });
   }
 
-  parts.push({ type: "text", text: message });
+  parts.push(...input.parts);
 
   return parts;
 }
 
 export function buildPromptText(parts: PromptPart[]): string {
-  return parts.map((part) => part.text).join("\n\n");
+  return renderAgentInputAsText({ parts });
 }
 
 export function buildSystemWrappedPrompt(systemPrompt: string, prompt: string): string {

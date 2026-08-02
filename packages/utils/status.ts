@@ -165,7 +165,8 @@ function resolveLongRunningSubagentPhase(state: SessionMessageState): string | u
     .reverse()
     .find((tool) => {
       const name = typeof tool.name === "string" ? tool.name.trim().toLowerCase() : "";
-      return (tool.status === "running" || tool.status === "pending") && name === "subagent";
+      const isSubagent = name === "subagent" || name === "subtask" || name === "task";
+      return (tool.status === "running" || tool.status === "pending") && isSubagent;
     });
 
   if (!runningSubagent) return undefined;
@@ -177,7 +178,15 @@ function resolveLongRunningSubagentPhase(state: SessionMessageState): string | u
   const elapsedMs = Date.now() - startedAtMs;
   if (elapsedMs < SUBAGENT_WAIT_THRESHOLD_MS) return undefined;
 
-  return `Waiting for subagent output (${formatElapsedTime(startedAtMs)})`;
+  const title = runningSubagent.title?.trim();
+  const progress = typeof runningSubagent.metadata?.progress === "string"
+    ? runningSubagent.metadata.progress.trim()
+    : typeof runningSubagent.metadata?.lastTool === "string"
+      ? runningSubagent.metadata.lastTool.trim()
+      : "";
+  return title
+    ? `Waiting for subagent: ${title}${progress ? ` — ${progress}` : ""} (${formatElapsedTime(startedAtMs)})`
+    : `Waiting for subagent output (${formatElapsedTime(startedAtMs)})`;
 }
 
 function normalizeToolName(name: string): string {
@@ -330,16 +339,22 @@ export function buildLiveStatusMessage(
   const headerDetails = buildHeaderDetails(state);
 
   if (state.sessionTitle) {
-    lines.push(`*${state.sessionTitle}* (${headerDetails})`);
+    lines.push(`**${state.sessionTitle}** · ${headerDetails}`);
   } else {
-    lines.push(`(${headerDetails})`);
+    lines.push(headerDetails);
   }
 
   const longRunningSubagentPhase = resolveLongRunningSubagentPhase(state);
   if (longRunningSubagentPhase) {
-    lines.push(`_${longRunningSubagentPhase}_`);
+    lines.push(`*${longRunningSubagentPhase}*`);
   } else if (state.phaseStatus) {
-    lines.push(`_${state.phaseStatus}_`);
+    lines.push(`*${state.phaseStatus}*`);
+  }
+
+  if (state.thinkingText?.trim()) {
+    const thinking = state.thinkingText.trim().replace(/\s+/g, " ");
+    const preview = thinking.length > 420 ? `${thinking.slice(0, 419)}…` : thinking;
+    lines.push("", "**Reasoning**", `> ${preview}`);
   }
 
   if (state.todos.length > 0) {
@@ -347,13 +362,19 @@ export function buildLiveStatusMessage(
       content: todo.content,
       status: todo.status,
     }));
-    lines.push("", "*Tasks*", ...formatTodoLines(todos));
+    lines.push("", "**Plan**", ...formatTodoLines(todos));
   }
 
   const toolLines = buildToolLines(state, workingPath, statusMessageFormat);
   if (toolLines.length > 0) {
-    lines.push("");
+    lines.push("", "**Activity**");
     lines.push(...toolLines);
+  }
+
+  if (state.currentText?.trim()) {
+    const current = state.currentText.trim();
+    const preview = current.length > 900 ? `${current.slice(0, 899)}…` : current;
+    lines.push("", "**Latest output**", preview);
   }
 
   return lines.join("\n");

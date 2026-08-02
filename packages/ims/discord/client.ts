@@ -49,6 +49,8 @@ import {
 } from "@/ims/discord/utils/rate-limit";
 import { DiscordStatusMessageIndex } from "@/ims/discord/state/status-message-index";
 import type { RawInboundEvent } from "@/core/model/raw-inbound-event";
+import { downloadAttachments } from "@/ims/shared/attachment-store";
+import type { InboundAttachment } from "@/shared/agent-protocol";
 import { requireDiscordWorkspaceClient } from "@/ims/discord/workspace-routing";
 import { DISCORD_CHANNEL_NOT_TEXT_BASED_CODE } from "@/shared/delivery/permanent-error";
 
@@ -62,6 +64,29 @@ const discordClients = new Map<string, Client>();
 const discordClientByProcessorId = new Map<string, Client>();
 const statusMessageIndex = new DiscordStatusMessageIndex();
 const discordThreadProcessorByKey = new Map<string, string>();
+
+async function downloadDiscordMessageAttachments(message: any): Promise<InboundAttachment[]> {
+  const raw = message?.attachments;
+  const values = raw && typeof raw.values === "function"
+    ? Array.from(raw.values()) as Array<Record<string, unknown>>
+    : [];
+  if (values.length === 0) return [];
+  return downloadAttachments({
+    platform: "discord",
+    messageId: String(message.id),
+    sources: values.flatMap((attachment) => {
+      const url = typeof attachment.url === "string" ? attachment.url : "";
+      if (!url) return [];
+      return [{
+        id: typeof attachment.id === "string" ? attachment.id : undefined,
+        filename: typeof attachment.name === "string" ? attachment.name : undefined,
+        mimeType: typeof attachment.contentType === "string" ? attachment.contentType : undefined,
+        size: typeof attachment.size === "number" ? attachment.size : undefined,
+        url,
+      }];
+    }),
+  });
+}
 const discordProcessorManager = createProcessorManager({
   createRuntime: (processorId) => createCoreRuntime({
     platform: "discord",
@@ -632,6 +657,7 @@ async function startDiscordRuntimeInternal(reason: string): Promise<boolean> {
             const parentId = message.channel.parentId;
             if (!parentId) return;
             if (configuredChannels && !configuredChannels.includes(parentId)) return;
+            const attachments = await downloadDiscordMessageAttachments(message);
 
             const threadId = message.channel.id;
             const text = message.content.trim();
@@ -666,6 +692,7 @@ async function startDiscordRuntimeInternal(reason: string): Promise<boolean> {
               activeThread: active,
               rawText: text,
               normalizedText,
+              attachments,
               receivedAtMs: Date.now(),
             };
             rememberThreadProcessor(parentId, threadId, processorId);
@@ -675,6 +702,7 @@ async function startDiscordRuntimeInternal(reason: string): Promise<boolean> {
 
           const parentId = message.channel.id;
           if (configuredChannels && !configuredChannels.includes(parentId)) return;
+          const attachments = await downloadDiscordMessageAttachments(message);
 
           if (await maybeHandleLauncherCommand({
             text: message.content,
@@ -699,7 +727,7 @@ async function startDiscordRuntimeInternal(reason: string): Promise<boolean> {
             });
             return;
           }
-          if (!topLevelText.trim()) {
+          if (!topLevelText.trim() && attachments.length === 0) {
             await message.reply("Please include a request after mentioning me.");
             return;
           }
@@ -714,7 +742,10 @@ async function startDiscordRuntimeInternal(reason: string): Promise<boolean> {
           }
 
           const thread = await message.startThread({
-            name: buildMeaningfulThreadName(topLevelText, DISCORD_THREAD_NAME_LIMIT),
+            name: buildMeaningfulThreadName(
+              topLevelText || attachments.map((attachment) => attachment.filename).join(" "),
+              DISCORD_THREAD_NAME_LIMIT
+            ),
             autoArchiveDuration: 60,
           });
 
@@ -737,6 +768,7 @@ async function startDiscordRuntimeInternal(reason: string): Promise<boolean> {
              activeThread: false,
             rawText: message.content,
             normalizedText: topLevelText,
+            attachments,
             receivedAtMs: Date.now(),
           });
         } catch (error) {

@@ -1,4 +1,5 @@
 import type { InboundDecision } from "@/core/model/inbound-decision";
+import { createAgentInput, type InboundAttachment } from "@/shared/agent-protocol";
 
 export function defaultInboundPolicy(params: {
   selfMessage: boolean;
@@ -8,6 +9,7 @@ export function defaultInboundPolicy(params: {
   mentionedBot: boolean;
   activeThread: boolean;
   normalizedText: string;
+  attachments?: readonly InboundAttachment[];
   detectStop?: boolean;
 }): InboundDecision {
   if (params.selfMessage) {
@@ -43,7 +45,8 @@ export function defaultInboundPolicy(params: {
   }
 
   const text = params.normalizedText.trim();
-  if (!text) {
+  const attachments = params.attachments ?? [];
+  if (!text && attachments.length === 0) {
     return { kind: "ignore", reason: "empty_text" };
   }
 
@@ -51,5 +54,5 @@ export function defaultInboundPolicy(params: {
     return { kind: "stop" };
   }
 
-  return { kind: "message", text };
+  return { kind: "message", text, input: createAgentInput(text, attachments) };
 }

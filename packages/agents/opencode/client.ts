@@ -3,9 +3,15 @@ import {
   getSessionClient,
   ensureValidSession,
   getSessionEnvironment,
+  getSessionRuntimeSnapshot,
   getSessionServerUrl,
   type SessionEnvironment,
 } from "./server";
+import {
+  DEFAULT_OPENCODE_IDLE_TIMEOUT_MS,
+  monitorOpenCodePrompt,
+} from "./prompt-monitor";
+import { pathToFileURL } from "node:url";
 import {
   setThreadSessionId,
   updateActiveRequest,
@@ -16,6 +22,7 @@ import { buildPromptParts, buildSystemPrompt } from "../shared";
 import { ServerAgentRuntime, formatShellCommand } from "../runtime/base";
 import { getOrCreateThreadSession } from "../runtime/thread-session";
 import type {
+  AgentInput,
   OpenCodeMessage,
   OpenCodeMessageContext,
   OpenCodeOptions,
@@ -23,6 +30,14 @@ import type {
 } from "../types";
 
 const runtime = new ServerAgentRuntime();
+
+function getOpenCodeIdleTimeoutMs(): number | null {
+  const raw = process.env.ODE_OPENCODE_IDLE_TIMEOUT_MS?.trim();
+  if (!raw) return DEFAULT_OPENCODE_IDLE_TIMEOUT_MS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_OPENCODE_IDLE_TIMEOUT_MS;
+  return parsed === 0 ? null : Math.floor(parsed);
+}
 
 export function buildOpenCodeCommand(
   url: string,
@@ -205,7 +220,7 @@ export async function getOrCreateSession(
 export async function sendMessage(
   channelId: string,
   sessionId: string,
-  message: string,
+  input: AgentInput,
   workingPath: string,
   options?: OpenCodeOptions,
   context?: OpenCodeMessageContext
@@ -260,7 +275,15 @@ export async function sendMessage(
         : undefined);
 
       // Build message parts
-      const parts = buildPromptParts(channelId, message, { ...options, agent }, context);
+      const parts = buildPromptParts(channelId, input, { ...options, agent }, context).map((part) => {
+        if (part.type === "text") return part;
+        return {
+          type: "file" as const,
+          mime: part.mimeType,
+          filename: part.filename,
+          url: pathToFileURL(part.path).href,
+        };
+      });
 
       // Build system prompt with Slack context
       const system = buildSystemPrompt(context?.slack);
@@ -278,10 +301,54 @@ export async function sendMessage(
 
       log.debug("Sending message via SDK", { sessionId: activeSessionId, agent, model, command });
 
-      const result = await client.session.prompt({
+      const promptParameters = {
         sessionID: activeSessionId,
         ...payload,
+      };
+      const promptAbortController = new AbortController();
+      const promptPromise = client.session.prompt(promptParameters, {
+        signal: promptAbortController.signal,
       });
+      const idleTimeoutMs = getOpenCodeIdleTimeoutMs();
+      const result = idleTimeoutMs === null
+        ? await promptPromise
+        : await monitorOpenCodePrompt({
+            prompt: promptPromise,
+            timeoutMs: idleTimeoutMs,
+            readHealth: async () => {
+              const snapshot = getSessionRuntimeSnapshot(activeSessionId);
+              if (!snapshot) return null;
+              try {
+                const statusResult = await client.session.status({ directory: workingPath });
+                if (statusResult.error || !statusResult.data) return null;
+                return {
+                  relatedSessionIds: snapshot.relatedSessionIds,
+                  lastMeaningfulEventAt: snapshot.lastMeaningfulEventAt,
+                  awaitingInteraction: snapshot.awaitingInteraction,
+                  statuses: statusResult.data as Record<string, unknown>,
+                };
+              } catch (error) {
+                // A transient health-check failure must not cancel a prompt
+                // that may still be progressing. The next poll can retry.
+                log.debug("OpenCode prompt health check failed", {
+                  sessionId: activeSessionId,
+                  error: String(error),
+                });
+                return null;
+              }
+            },
+            abort: async () => {
+              const snapshot = getSessionRuntimeSnapshot(activeSessionId);
+              const sessionIds = snapshot?.relatedSessionIds ?? [activeSessionId];
+              await Promise.allSettled(sessionIds.map((relatedSessionId) =>
+                client.session.abort({
+                  sessionID: relatedSessionId,
+                  directory: workingPath,
+                })
+              ));
+              promptAbortController.abort();
+            },
+          });
 
       log.debug("OpenCode SDK response received", {
         hasData: !!result.data,

@@ -4,6 +4,7 @@ import * as os from "os";
 import { mkdir, readdir, readFile, unlink, writeFile } from "fs/promises";
 import { log } from "@/utils";
 import type { AgentProviderId } from "@/shared/agent-provider";
+import type { AgentSessionBinding } from "@/shared/agent-protocol";
 
 const readFileSync = fs.readFileSync;
 const readdirSync = fs.readdirSync;
@@ -45,8 +46,6 @@ export interface ActiveRequest {
   tools?: TrackedTool[];
   todos: TrackedTodo[];
   statusFrozen?: boolean;
-  statusStreamActive?: boolean;
-  statusStreamTs?: string;
   state: "processing" | "completed" | "failed";
   finalResponseTs?: string;
   error?: string;
@@ -83,6 +82,7 @@ export interface PersistedSession {
   channelId: string;
   threadId: string;
   providerId?: AgentProviderId;
+  binding?: AgentSessionBinding;
   platform?: "slack" | "discord" | "lark";
   workingDirectory: string;
   threadOwnerUserId?: string;
@@ -390,7 +390,6 @@ export function createActiveRequest(
     tools: [],
     todos: [],
     statusFrozen: false,
-    statusStreamActive: false,
     state: "processing",
   };
 }
@@ -512,6 +511,28 @@ export function setThreadSessionId(channelId: string, threadId: string, sessionI
   if (!session) return;
   if (session.sessionId === sessionId) return;
   session.sessionId = sessionId;
+  if (session.binding) {
+    session.binding = {
+      ...session.binding,
+      nativeSessionId: sessionId,
+      updatedAt: Date.now(),
+    };
+  }
+  saveSession(session);
+}
+
+export function updateThreadSessionBinding(
+  channelId: string,
+  threadId: string,
+  update: Partial<Pick<AgentSessionBinding, "transport" | "nativeSessionId" | "protocolVersion" | "capabilities">>
+): void {
+  const session = loadSession(channelId, threadId);
+  if (!session?.binding) return;
+  session.binding = {
+    ...session.binding,
+    ...update,
+    updatedAt: Date.now(),
+  };
   saveSession(session);
 }
 

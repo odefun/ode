@@ -43,6 +43,7 @@ import {
 import { sendChannelMessage as sendLarkChannelMessage } from "@/ims/lark/client";
 import { isPermanentChannelError } from "@/shared/delivery/permanent-error";
 import { log } from "@/utils";
+import { createAgentInput } from "@/shared/agent-protocol";
 
 const CRON_POLL_INTERVAL_MS = 15_000;
 
@@ -417,7 +418,7 @@ async function runCronJob(job: CronJobRecord, minuteStartMs: number): Promise<vo
       agent.sendMessage(
         job.channelId,
         sessionId,
-        job.messageText,
+        createAgentInput(job.messageText),
         cwd,
         options,
         buildCronAgentContext(job, runId)

@@ -64,7 +64,7 @@ describe("claude stream status parsing", () => {
     expect(state.currentText).toBe("Hello world");
   });
 
-  it("tracks tool lifecycle and parsed input from raw events", () => {
+  it("keeps a tool running when only its streamed input block has ended", () => {
     const now = Date.now();
     const state = buildSessionMessageState([
       rawEvent(now, {
@@ -97,11 +97,63 @@ describe("claude stream status parsing", () => {
       }),
     ]);
 
-    expect(state.phaseStatus).toBe("Finished tool: Read");
+    expect(state.phaseStatus).toBe("Running tool: Read");
     expect(state.tools.length).toBe(1);
     expect(state.tools[0]?.name).toBe("Read");
-    expect(state.tools[0]?.status).toBe("completed");
+    expect(state.tools[0]?.status).toBe("running");
     expect(state.tools[0]?.input).toEqual({ filePath: "README.md" });
+  });
+
+  it("does not resurrect a completed tool when the next message reuses its block index", () => {
+    const now = Date.now();
+    const state = buildSessionMessageState([
+      rawEvent(now, {
+        type: "stream_event",
+        event: { type: "message_start", message: { id: "message_tool" } },
+      }),
+      rawEvent(now + 1, {
+        type: "stream_event",
+        event: {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "tool_use", id: "tool_read", name: "Read" },
+        },
+      }),
+      rawEvent(now + 2, {
+        type: "user",
+        message: {
+          content: [{ type: "tool_result", tool_use_id: "tool_read", content: "done" }],
+        },
+      }),
+      rawEvent(now + 3, {
+        type: "stream_event",
+        event: { type: "message_start", message: { id: "message_text" } },
+      }),
+      rawEvent(now + 4, {
+        type: "stream_event",
+        event: {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "text", text: "" },
+        },
+      }),
+      rawEvent(now + 5, {
+        type: "stream_event",
+        event: {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "finished" },
+        },
+      }),
+      rawEvent(now + 6, {
+        type: "stream_event",
+        event: { type: "content_block_stop", index: 0 },
+      }),
+    ], { provider: "claudecode" });
+
+    expect(state.currentText).toBe("finished");
+    expect(state.tools.find((tool) => tool.id === "tool_read")?.status).toBe("completed");
+    expect(state.phaseStatus).toBe("Finished step");
   });
 
   it("tracks tool lifecycle from assistant tool_use and user tool_result records", () => {
@@ -365,7 +417,117 @@ describe("claude stream status parsing", () => {
 
     expect(text).toContain("`Read` packages/core/index.ts");
     expect(text).toContain("`Bash` ls -la");
-    expect(text).toContain("`Task`");
+    expect(text).toContain("`subagent`");
+  });
+
+  it("renders real Claude task lifecycle events as one subagent", () => {
+    const now = Date.now() - 35_000;
+    const events = [
+      rawEvent(now, {
+        type: "assistant",
+        message: {
+          content: [{
+            type: "tool_use",
+            id: "call_agent_1",
+            name: "Agent",
+            input: { description: "Read package metadata", prompt: "Read package.json" },
+          }],
+        },
+      }),
+      rawEvent(now + 1, {
+        type: "system",
+        subtype: "task_started",
+        task_id: "task_1",
+        tool_use_id: "call_agent_1",
+        description: "Read package metadata",
+        subagent_type: "general-purpose",
+      }),
+      rawEvent(now + 2, {
+        type: "assistant",
+        parent_tool_use_id: "call_agent_1",
+        task_description: "Read package metadata",
+        message: {
+          content: [{
+            type: "tool_use",
+            id: "child_read",
+            name: "Read",
+            input: { file_path: "/tmp/repo/package.json" },
+          }],
+        },
+      }),
+      rawEvent(now + 3, {
+        type: "system",
+        subtype: "task_progress",
+        task_id: "task_1",
+        tool_use_id: "call_agent_1",
+        description: "Reading package.json",
+        summary: "Checking package metadata",
+        last_tool_name: "Read",
+        usage: { total_tokens: 20, tool_uses: 1, duration_ms: 3000 },
+      }),
+    ];
+    const running = buildSessionMessageState(events);
+
+    expect(running.tools).toHaveLength(1);
+    expect(running.tools[0]?.name).toBe("subagent");
+    expect(running.tools[0]?.status).toBe("running");
+    expect(running.tools[0]?.metadata?.lastTool).toBe("Read");
+    expect(running.phaseStatus).toBe("Subagent Read package metadata: Checking package metadata");
+
+    const statusText = buildStatusMessageByProvider(
+      "claudecode",
+      {
+        channelId: "C1",
+        threadId: "T1",
+        statusMessageTs: "S1",
+        startedAt: now,
+        currentText: "",
+      },
+      "/tmp/repo",
+      running,
+      "medium"
+    );
+    expect(statusText).toContain("Waiting for subagent: Read package metadata");
+    expect(statusText).not.toContain("`Read`");
+
+    const completed = buildSessionMessageState([
+      ...events,
+      rawEvent(now + 4, {
+        type: "system",
+        subtype: "task_notification",
+        task_id: "task_1",
+        tool_use_id: "call_agent_1",
+        status: "completed",
+        summary: "ode 0.2.0",
+      }),
+    ]);
+    expect(completed.tools[0]?.status).toBe("completed");
+    expect(completed.tools[0]?.output).toBe("ode 0.2.0");
+    expect(completed.phaseStatus).toBe("Finished subagent: Read package metadata");
+  });
+
+  it("shows Claude retry and precise result errors", () => {
+    const now = Date.now();
+    const retrying = buildSessionMessageState([
+      rawEvent(now, {
+        type: "system",
+        subtype: "api_retry",
+        attempt: 2,
+        max_retries: 4,
+        retry_delay_ms: 2500,
+      }),
+    ]);
+    expect(retrying.phaseStatus).toBe("Retrying Claude request 2/4 in 3s");
+
+    const failed = buildSessionMessageState([
+      rawEvent(now, {
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        errors: ["upstream disconnected"],
+      }),
+    ]);
+    expect(failed.phaseStatus).toBe("Claude error: upstream disconnected");
   });
 
   it("uses frequency config for latest actions and shows last-N header", () => {
@@ -407,7 +569,7 @@ describe("claude stream status parsing", () => {
     expect(text).toContain("`Read` file-9.ts");
   });
 
-  it("uses shared renderer format without inline response body", () => {
+  it("uses shared renderer format with a latest-output preview", () => {
     const now = Date.now();
     const longResponse = `${"A".repeat(180)}\n\n${"B".repeat(180)}`;
     const state = buildSessionMessageState([
@@ -439,7 +601,8 @@ describe("claude stream status parsing", () => {
     );
 
     expect(text).toContain("Drafting response");
-    expect(text).not.toContain(longResponse);
+    expect(text).toContain("**Latest output**");
+    expect(text).toContain(longResponse);
   });
 
   it("falls back to claude header when title is unavailable", () => {

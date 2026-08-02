@@ -12,7 +12,9 @@ import {
   type SessionEnvironment as RuntimeSessionEnvironment,
 } from "../runtime/base";
 import { createCliThreadSessionManager } from "../runtime/cli-session";
+import { inspectCliProtocol } from "../runtime/protocol-drift";
 import type {
+  AgentInput,
   OpenCodeMessage,
   OpenCodeMessageContext,
   OpenCodeOptions,
@@ -40,7 +42,7 @@ export type CrushRawRecord = {
 const runtime = new CliAgentRuntime("Crush");
 const NEW_SESSIONS_MAX_ENTRIES = 1000;
 const newSessions = new BoundedSet<string>(NEW_SESSIONS_MAX_ENTRIES);
-const DEFAULT_CRUSH_MODEL = "chainbot/gpt-5.1";
+const CRUSH_RECORD_TYPES = ["start", "progress", "log", "message", "text"];
 
 export const { createSession, getOrCreateSession } = createCliThreadSessionManager({
   providerId: "crush",
@@ -54,8 +56,8 @@ function resolveCrushBinary(): string {
   return "crush";
 }
 
-function resolveCrushModel(model?: OpenCodeOptions["model"]): string {
-  if (!model?.modelID) return DEFAULT_CRUSH_MODEL;
+function resolveCrushModel(model?: OpenCodeOptions["model"]): string | undefined {
+  if (!model?.modelID) return undefined;
   const providerID = model.providerID?.trim();
   if (providerID && providerID !== "crush") return `${providerID}/${model.modelID}`;
   if (model.modelID.includes("/")) return model.modelID;
@@ -71,9 +73,9 @@ export function buildCrushCommandArgs(params: {
   const args = [
     "run",
     "--verbose",
-    "--model",
-    resolveCrushModel(params.model),
   ];
+  const model = resolveCrushModel(params.model);
+  if (model) args.push("--model", model);
   if (!params.isNewSession) {
     args.push("--session", params.sessionId);
   }
@@ -282,6 +284,11 @@ function publishCrushRecord(record: CrushRawRecord, sessionId: string): void {
     properties: {
       record,
       recordType: rawType,
+      ...inspectCliProtocol({
+        providerName: "Crush",
+        recordType: rawType,
+        knownRecordTypes: CRUSH_RECORD_TYPES,
+      }),
     },
   });
 }
@@ -289,7 +296,7 @@ function publishCrushRecord(record: CrushRawRecord, sessionId: string): void {
 export async function sendMessage(
   channelId: string,
   sessionId: string,
-  message: string,
+  input: AgentInput,
   workingPath: string,
   options?: OpenCodeOptions,
   context?: OpenCodeMessageContext
@@ -301,7 +308,7 @@ export async function sendMessage(
     return await runtime.withSessionLock(sessionKey, async () => {
       const agent = options?.agent;
       const isNewSession = newSessions.has(sessionId);
-      const parts = buildPromptParts(channelId, message, { ...options, agent }, context);
+      const parts = buildPromptParts(channelId, input, { ...options, agent }, context);
       const prompt = buildPromptText(parts);
       const crushPrompt = buildSystemWrappedPrompt(buildSystemPrompt(context?.slack), prompt);
       const envOverrides = runtime.getSessionEnvironment(sessionId);
@@ -320,7 +327,7 @@ export async function sendMessage(
           record: {
             type: "start",
             model,
-            prompt: compactSingleLine(message),
+            prompt: compactSingleLine(prompt),
           } satisfies CrushRawRecord,
           recordType: "start",
         },
@@ -329,7 +336,7 @@ export async function sendMessage(
         publishCrushRecord({
           type: "progress",
           model,
-          prompt: compactSingleLine(message),
+          prompt: compactSingleLine(prompt),
           elapsedMs: Date.now() - startedAtMs,
         }, sessionId);
       }, 15_000);

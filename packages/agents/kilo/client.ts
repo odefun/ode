@@ -1,4 +1,5 @@
-import { setThreadSessionId } from "@/config/local/sessions";
+import { setThreadSessionId, updateThreadSessionBinding } from "@/config/local/sessions";
+import { LEGACY_AGENT_CAPABILITIES } from "@/shared/agent-protocol";
 import { BoundedSet, log } from "@/utils";
 import { buildPromptParts, buildPromptText, buildSystemPrompt, buildSystemWrappedPrompt } from "../shared";
 import {
@@ -9,7 +10,15 @@ import {
   type SessionEnvironment as RuntimeSessionEnvironment,
 } from "../runtime/base";
 import { createCliThreadSessionManager } from "../runtime/cli-session";
+import { inspectCliProtocol } from "../runtime/protocol-drift";
+import {
+  cancelAcpSession,
+  prependSystemPrompt,
+  sendMessageViaAcp,
+  stopAcpProvider,
+} from "../runtime/acp-client";
 import type {
+  AgentInput,
   OpenCodeMessage,
   OpenCodeMessageContext,
   OpenCodeOptions,
@@ -81,6 +90,17 @@ const runtime = new CliAgentRuntime("Kilo");
 /** See note in claude/client.ts — FIFO-bounded so abandoned sessions don't leak. */
 const NEW_SESSIONS_MAX_ENTRIES = 1000;
 const newSessions = new BoundedSet<string>(NEW_SESSIONS_MAX_ENTRIES);
+const KILO_RECORD_TYPES = [
+  "text",
+  "tool_use",
+  "step_start",
+  "step_finish",
+  "assistant",
+  "user",
+  "tool",
+  "result",
+  "stream_event",
+];
 const kiloSessionPrefix = "ses_";
 
 function resolveKiloBinary(): string {
@@ -122,7 +142,6 @@ export function buildKiloCommandArgs(params: {
 }): string[] {
   const args = [
     "run",
-    "--auto",
     "--format",
     "json",
   ];
@@ -168,12 +187,20 @@ function publishKiloRecordAsSessionEvents(record: KiloJsonRecord, fallbackSessio
     : typeof record.role === "string" && record.role.trim()
       ? record.role.trim()
       : "unknown";
+  const streamEventType = typeof record.event?.type === "string" ? record.event.type : undefined;
   const eventPayload = {
     type: `kilo.raw.${rawType}`,
     properties: {
       record,
       recordType: rawType,
-      streamEventType: typeof record.event?.type === "string" ? record.event.type : undefined,
+      streamEventType,
+      ...inspectCliProtocol({
+        providerName: "Kilo",
+        recordType: rawType,
+        streamEventType,
+        knownRecordTypes: KILO_RECORD_TYPES,
+        anthropicStyleStream: true,
+      }),
     },
   };
   runtime.publishSessionEvent(sessionId, eventPayload);
@@ -308,10 +335,10 @@ export function extractKiloFinalResponse(output: string): string {
   return text || cleaned.trim();
 }
 
-export async function sendMessage(
+async function sendMessageViaCli(
   channelId: string,
   sessionId: string,
-  message: string,
+  input: AgentInput,
   workingPath: string,
   options?: OpenCodeOptions,
   context?: OpenCodeMessageContext
@@ -323,7 +350,7 @@ export async function sendMessage(
     return await runtime.withSessionLock(sessionKey, async () => {
       const agent = options?.agent;
       const isNewSession = newSessions.has(sessionId);
-      const parts = buildPromptParts(channelId, message, { ...options, agent }, context);
+      const parts = buildPromptParts(channelId, input, { ...options, agent }, context);
       const prompt = buildPromptText(parts);
       const systemPrompt = buildSystemPrompt(context?.slack);
       const kiloPrompt = buildSystemWrappedPrompt(systemPrompt, prompt);
@@ -445,13 +472,80 @@ export async function sendMessage(
   }
 }
 
+export async function sendMessage(
+  channelId: string,
+  sessionId: string,
+  input: AgentInput,
+  workingPath: string,
+  options?: OpenCodeOptions,
+  context?: OpenCodeMessageContext
+): Promise<OpenCodeMessage[]> {
+  const agent = options?.agent;
+  const promptParts = buildPromptParts(channelId, input, { ...options, agent }, context);
+  const systemPrompt = buildSystemPrompt(context?.slack);
+  const environment = runtime.getSessionEnvironment(sessionId);
+
+  return sendMessageViaAcp({
+    providerId: "kilo",
+    providerName: "Kilo",
+    launch: { command: resolveKiloBinary(), args: ["acp"] },
+    channelId,
+    sessionId,
+    isNewSession: newSessions.has(sessionId),
+    workingPath,
+    environment,
+    parts: prependSystemPrompt(promptParts, systemPrompt),
+    options,
+    publisher: runtime,
+    onNativeSessionId: (nativeSessionId) => {
+      runtime.setSessionEnvironment(nativeSessionId, environment);
+      newSessions.delete(sessionId);
+      newSessions.delete(nativeSessionId);
+      if (nativeSessionId !== sessionId && context?.slack?.threadId) {
+        setThreadSessionId(channelId, context.slack.threadId, nativeSessionId);
+      }
+    },
+    onNegotiated: ({ protocolVersion, capabilities }) => {
+      if (context?.slack?.threadId) {
+        updateThreadSessionBinding(channelId, context.slack.threadId, {
+          transport: "acp",
+          protocolVersion,
+          capabilities,
+        });
+      }
+    },
+    onFallback: () => {
+      if (context?.slack?.threadId) {
+        updateThreadSessionBinding(channelId, context.slack.threadId, {
+          transport: "cli-json",
+          protocolVersion: undefined,
+          capabilities: LEGACY_AGENT_CAPABILITIES,
+        });
+      }
+    },
+    fallback: () => sendMessageViaCli(channelId, sessionId, input, workingPath, options, context),
+  });
+}
+
 export const ensureSession = runtime.ensureSession.bind(runtime);
 
 export const subscribeToSession = runtime.subscribeToSession.bind(runtime);
 
-export const abortSession = runtime.abortSession.bind(runtime);
+export async function abortSession(sessionId: string): Promise<void> {
+  await cancelAcpSession("kilo", sessionId).catch(() => false);
+  await runtime.abortSession(sessionId);
+}
 
-export const cancelActiveRequest = runtime.cancelActiveRequest.bind(runtime);
+export async function cancelActiveRequest(channelId: string, sessionId: string): Promise<boolean> {
+  const [acpCancelled, cliCancelled] = await Promise.all([
+    cancelAcpSession("kilo", sessionId).catch(() => false),
+    runtime.cancelActiveRequest(channelId, sessionId),
+  ]);
+  return acpCancelled || cliCancelled;
+}
 
-export const stopServer = runtime.stopServer.bind(runtime);
+export function stopServer(): void {
+  stopAcpProvider("kilo");
+  runtime.stopServer();
+}
 export const startServer = noopStartServer;

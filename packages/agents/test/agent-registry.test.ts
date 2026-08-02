@@ -28,11 +28,6 @@ describe("agent registry", () => {
     expect(getSelectedAgentProviderId()).toBe("kimi");
   });
 
-  it("selects kiro from env", () => {
-    process.env.ODE_AGENT_PROVIDER = "kiro";
-    expect(getSelectedAgentProviderId()).toBe("kiro");
-  });
-
   it("selects kilo from env", () => {
     process.env.ODE_AGENT_PROVIDER = "kilo";
     expect(getSelectedAgentProviderId()).toBe("kilo");
@@ -48,11 +43,6 @@ describe("agent registry", () => {
     expect(getSelectedAgentProviderId()).toBe("goose");
   });
 
-  it("selects gemini from env", () => {
-    process.env.ODE_AGENT_PROVIDER = "gemini";
-    expect(getSelectedAgentProviderId()).toBe("gemini");
-  });
-
   for (const provider of ["pi", "openhands", "codebuddy", "crush"] as const) {
     it(`selects ${provider} from env`, () => {
       process.env.ODE_AGENT_PROVIDER = provider;
@@ -64,11 +54,9 @@ describe("agent registry", () => {
     const opencode = getAgentProvider("opencode");
     const claudecode = getAgentProvider("claudecode");
     const kimi = getAgentProvider("kimi");
-    const kiro = getAgentProvider("kiro");
     const kilo = getAgentProvider("kilo");
     const qwen = getAgentProvider("qwen");
     const goose = getAgentProvider("goose");
-    const gemini = getAgentProvider("gemini");
     const pi = getAgentProvider("pi");
     const openhands = getAgentProvider("openhands");
     const codebuddy = getAgentProvider("codebuddy");
@@ -76,11 +64,9 @@ describe("agent registry", () => {
     expect(opencode.supportsEventStream).toBe(true);
     expect(claudecode.supportsEventStream).toBe(false);
     expect(kimi.supportsEventStream).toBe(false);
-    expect(kiro.supportsEventStream).toBe(false);
     expect(kilo.supportsEventStream).toBe(false);
     expect(qwen.supportsEventStream).toBe(false);
     expect(goose.supportsEventStream).toBe(false);
-    expect(gemini.supportsEventStream).toBe(false);
     expect(pi.supportsEventStream).toBe(false);
     expect(openhands.supportsEventStream).toBe(false);
     expect(codebuddy.supportsEventStream).toBe(false);

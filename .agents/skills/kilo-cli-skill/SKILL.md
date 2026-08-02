@@ -12,14 +12,15 @@ description: Reference guide for integrating and operating Kilo CLI in Ode, focu
 Use this when implementing or debugging the `kilo` provider in Ode, especially CLI command construction, session behavior, and JSON output handling.
 
 ## Recommended invocation pattern for Ode
-- Base command: `kilo run --auto --format json --session <id> "<prompt>"`
+- Preferred structured transport: `kilo acp` from the target working directory.
+- Compatibility fallback: `kilo run --format json --session <id> "<prompt>"`
 - Add `--agent <agent>` when a plan/build agent is requested.
 - Add `--model <provider/model>` when a model override is configured.
 - Run with `cwd` set to the target workspace path.
 
 ## Key CLI references
 - Start TUI: `kilo` (or `kilo [project]`)
-- Non-interactive: `kilo run [message..]` with `--auto` and `--format json`
+- Non-interactive: `kilo run [message..]` with `--format json`; `--auto` grants all permissions and should not be added on an unsandboxed developer machine.
 - Server mode: `kilo serve`, attach with `kilo attach <url>`
 - Auth: `kilo auth`, provider setup via `/connect` in the TUI
 - Models: `kilo models [provider]`
@@ -37,7 +38,8 @@ Use this when implementing or debugging the `kilo` provider in Ode, especially C
 ## Integration notes for Ode
 - Kilo does not require channel-level model selection in Ode config.
 - Emit `session.status` and `message.part.updated` events for live status.
-- Prefer CLI mode unless event fidelity requires server attach.
+- Prefer ACP for session lifecycle, content blocks, and structured tool/plan/message updates. Keep `kilo run --format json` as the compatibility fallback when ACP setup fails.
+- ACP `session/request_permission` must be surfaced to the originating user and answered explicitly; never select an allow option automatically.
 
 ## Source
 - https://kilo.ai/docs/code-with-ai/platforms/cli

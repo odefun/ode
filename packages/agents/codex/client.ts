@@ -9,7 +9,21 @@ import {
   type SessionEnvironment as RuntimeSessionEnvironment,
 } from "../runtime/base";
 import { createCliThreadSessionManager } from "../runtime/cli-session";
+import {
+  CodexAppServerConnection,
+  CodexAppServerUnavailableError,
+  replyToCodexAppServerQuestion,
+} from "./app-server";
+import {
+  createCodexAppEventState,
+  getCodexAppNotificationContext,
+  isKnownCodexAppNotificationMethod,
+  normalizeCodexAppNotification,
+  type CodexAppEventState,
+  type CodexAppSessionEvent,
+} from "./app-events";
 import type {
+  AgentInput,
   OpenCodeMessage,
   OpenCodeMessageContext,
   OpenCodeOptions,
@@ -18,6 +32,14 @@ import type {
 const runtime = new CliAgentRuntime("Codex");
 const NEW_SESSIONS_MAX_ENTRIES = 1000;
 const newSessions = new BoundedSet<string>(NEW_SESSIONS_MAX_ENTRIES);
+type CodexAppConnectionEntry = {
+  connection: CodexAppServerConnection;
+  aliases: Set<string>;
+  threadId?: string;
+  eventState: CodexAppEventState;
+  unknownMethods: Set<string>;
+};
+const appConnections = new Map<string, CodexAppConnectionEntry>();
 export const { createSession, getOrCreateSession } = createCliThreadSessionManager({
   providerId: "codex",
   providerName: "Codex",
@@ -91,7 +113,7 @@ export function buildCodexCommandArgs(params: {
   if (params.planMode) {
     args.push("--sandbox", "read-only");
   } else {
-    args.push("--yolo");
+    args.push("--dangerously-bypass-approvals-and-sandbox");
   }
   if (params.model) {
     args.push("--model", params.model);
@@ -119,6 +141,72 @@ function publishCodexEvent(sessionId: string, event: CodexJsonEvent): void {
       eventType: rawType,
     },
   });
+}
+
+function publishCodexAppEvent(entry: CodexAppConnectionEntry, notification: Record<string, any>): void {
+  const method = typeof notification.method === "string" ? notification.method : "unknown";
+  const context = getCodexAppNotificationContext(entry.eventState, notification);
+  const normalizedEvents = normalizeCodexAppNotification(entry.eventState, notification);
+  const publish = (sessionId: string, event: Record<string, unknown>): void => {
+    runtime.publishSessionEvent(sessionId, event);
+  };
+
+  if (!isKnownCodexAppNotificationMethod(method) && !entry.unknownMethods.has(method)) {
+    entry.unknownMethods.add(method);
+    log.warn("Unknown Codex app-server notification", {
+      method,
+      rootThreadId: entry.threadId,
+      sourceThreadId: context.sourceThreadId,
+    });
+  }
+
+  for (const sessionId of entry.aliases) {
+    publish(sessionId, {
+      type: `codex.app.${method.replaceAll("/", ".")}`,
+      properties: {
+        notification,
+        odeContext: context,
+        protocolKnown: isKnownCodexAppNotificationMethod(method),
+      },
+    });
+    for (const event of normalizedEvents) {
+      publish(sessionId, scopeCodexAppEvent(event, sessionId));
+    }
+  }
+}
+
+function scopeCodexAppEvent(event: CodexAppSessionEvent, sessionId: string): CodexAppSessionEvent {
+  if (event.type === "question.asked") {
+    return { ...event, properties: { ...event.properties, sessionID: sessionId } };
+  }
+  if (event.type !== "message.part.updated") return event;
+  const part = event.properties.part;
+  if (!part || typeof part !== "object" || Array.isArray(part)) return event;
+  return {
+    ...event,
+    properties: {
+      ...event.properties,
+      part: { ...part, sessionID: sessionId },
+    },
+  };
+}
+
+function getOrCreateCodexAppConnection(params: {
+  sessionId: string;
+  cwd: string;
+  env: Record<string, string>;
+}): CodexAppConnectionEntry {
+  const existing = appConnections.get(params.sessionId);
+  if (existing) return existing;
+  const entry = {} as CodexAppConnectionEntry;
+  entry.aliases = new Set([params.sessionId]);
+  entry.eventState = createCodexAppEventState();
+  entry.unknownMethods = new Set();
+  entry.connection = new CodexAppServerConnection(params.cwd, params.env, (notification) => {
+    publishCodexAppEvent(entry, notification);
+  });
+  appConnections.set(params.sessionId, entry);
+  return entry;
 }
 
 function parseCodexResponse(output: string): {
@@ -165,10 +253,10 @@ function parseCodexResponse(output: string): {
   return { text, threadId };
 }
 
-export async function sendMessage(
+async function sendMessageViaCli(
   channelId: string,
   sessionId: string,
-  message: string,
+  input: AgentInput,
   workingPath: string,
   options?: OpenCodeOptions,
   context?: OpenCodeMessageContext
@@ -181,7 +269,7 @@ export async function sendMessage(
     return await runtime.withSessionLock(sessionKey, async () => {
       const agent = options?.agent;
       const planMode = agent?.trim().toLowerCase() === "plan";
-      const parts = buildPromptParts(channelId, message, { ...options, agent }, context);
+      const parts = buildPromptParts(channelId, input, { ...options, agent }, context);
       const prompt = buildPromptText(parts);
       const systemPrompt = buildSystemPrompt(context?.slack);
       const codexPrompt = buildSystemWrappedPrompt(systemPrompt, prompt);
@@ -242,14 +330,157 @@ export async function sendMessage(
   }
 }
 
+function buildCodexAppInput(parts: ReturnType<typeof buildPromptParts>, systemPrompt: string): Record<string, unknown>[] {
+  const text = buildSystemWrappedPrompt(systemPrompt, buildPromptText(parts));
+  const result: Record<string, unknown>[] = [{ type: "text", text, text_elements: [] }];
+  for (const part of parts) {
+    if (part.type === "image") {
+      result.push({ type: "localImage", path: part.path });
+    }
+  }
+  return result;
+}
+
+async function sendMessageViaAppServer(
+  channelId: string,
+  sessionId: string,
+  input: AgentInput,
+  workingPath: string,
+  options?: OpenCodeOptions,
+  context?: OpenCodeMessageContext
+): Promise<OpenCodeMessage[]> {
+  const sessionKey = `${channelId}:${sessionId}`;
+  runtime.beginRequest(sessionKey);
+  try {
+    return await runtime.withSessionLock(sessionKey, async () => {
+      await syncCodexModelsFromCache();
+      const envOverrides = runtime.getSessionEnvironment(sessionId);
+      const entry = getOrCreateCodexAppConnection({ sessionId, cwd: workingPath, env: envOverrides });
+      await entry.connection.initialize();
+
+      const agent = options?.agent;
+      const planMode = agent?.trim().toLowerCase() === "plan";
+      const model = getCodexModel(options);
+      const systemPrompt = buildSystemPrompt(context?.slack);
+      const isNewSession = newSessions.has(sessionId);
+      let nativeThreadId: string;
+      if (entry.threadId) {
+        nativeThreadId = entry.threadId;
+      } else if (isNewSession) {
+        nativeThreadId = await entry.connection.startThread({
+          cwd: workingPath,
+          model,
+          systemPrompt,
+          planMode,
+        });
+      } else {
+        nativeThreadId = await entry.connection.resumeThread({
+          threadId: sessionId,
+          cwd: workingPath,
+          model,
+          systemPrompt,
+          planMode,
+        });
+      }
+      entry.threadId = nativeThreadId;
+      entry.eventState.rootThreadId = nativeThreadId;
+      entry.aliases.add(nativeThreadId);
+      appConnections.set(nativeThreadId, entry);
+      runtime.setSessionEnvironment(nativeThreadId, envOverrides);
+
+      if (nativeThreadId !== sessionId && context?.slack?.threadId) {
+        setThreadSessionId(channelId, context.slack.threadId, nativeThreadId);
+      }
+      newSessions.delete(sessionId);
+      newSessions.delete(nativeThreadId);
+
+      const parts = buildPromptParts(channelId, input, { ...options, agent }, context);
+      const turn = await entry.connection.runTurn({
+        threadId: nativeThreadId,
+        input: buildCodexAppInput(parts, ""),
+        cwd: workingPath,
+        model,
+        effort: options?.reasoningEffort,
+        planMode,
+      });
+      const messages = Array.isArray(turn.items)
+        ? turn.items
+          .filter((item: Record<string, unknown>) => item?.type === "agentMessage" && typeof item.text === "string")
+          .map((item: Record<string, unknown>) => String(item.text).trim())
+          .filter(Boolean)
+        : [];
+      const text = messages.join("\n\n").trim();
+      if (!text) throw new Error("Codex app-server returned no assistant message");
+      return [{ text, messageType: "assistant" }];
+    });
+  } finally {
+    runtime.endRequest(sessionKey);
+  }
+}
+
+export async function sendMessage(
+  channelId: string,
+  sessionId: string,
+  input: AgentInput,
+  workingPath: string,
+  options?: OpenCodeOptions,
+  context?: OpenCodeMessageContext
+): Promise<OpenCodeMessage[]> {
+  try {
+    return await sendMessageViaAppServer(
+      channelId,
+      sessionId,
+      input,
+      workingPath,
+      options,
+      context
+    );
+  } catch (error) {
+    if (!(error instanceof CodexAppServerUnavailableError)) throw error;
+    log.warn("Codex app-server unavailable; falling back to codex exec", {
+      sessionId,
+      error: error.message,
+    });
+    return sendMessageViaCli(channelId, sessionId, input, workingPath, options, context);
+  }
+}
+
 export const ensureSession = runtime.ensureSession.bind(runtime);
 
 export const subscribeToSession = runtime.subscribeToSession.bind(runtime);
 
-export const abortSession = runtime.abortSession.bind(runtime);
+export async function abortSession(sessionId: string): Promise<void> {
+  await appConnections.get(sessionId)?.connection.interrupt();
+  await runtime.abortSession(sessionId);
+}
 
-export const cancelActiveRequest = runtime.cancelActiveRequest.bind(runtime);
+export async function cancelActiveRequest(
+  channelId: string,
+  sessionId: string,
+  directory?: string
+): Promise<boolean> {
+  const app = appConnections.get(sessionId);
+  if (app) {
+    await app.connection.interrupt();
+    return true;
+  }
+  return runtime.cancelActiveRequest(channelId, sessionId);
+}
 
-export const stopServer = runtime.stopServer.bind(runtime);
+export async function stopServer(): Promise<void> {
+  const connections = new Set(Array.from(appConnections.values()).map((entry) => entry.connection));
+  for (const connection of connections) connection.close();
+  appConnections.clear();
+  await runtime.stopServer();
+}
 
 export const startServer = syncCodexModelsFromCache;
+
+export async function replyToQuestion(params: {
+  requestId: string;
+  answers: Array<Array<string>>;
+}): Promise<void> {
+  if (!replyToCodexAppServerQuestion(params.requestId, params.answers)) {
+    throw new Error(`Unknown Codex question request: ${params.requestId}`);
+  }
+}

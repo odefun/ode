@@ -7,6 +7,7 @@ import type { RuntimeRequestContext } from "@/core/kernel/request-context";
 import { isSyntheticOwner } from "@/ims/shared/synthetic-owner";
 import { log } from "@/utils";
 import { createHash } from "crypto";
+import { randomUUID } from "node:crypto";
 
 function isCiEnvironment(): boolean {
   const value = process.env.CI?.trim().toLowerCase();
@@ -138,6 +139,17 @@ export async function prepareRuntimeSession(params: {
   if (session.providerId !== providerId) {
     session.providerId = providerId;
   }
+
+  const now = Date.now();
+  session.binding = {
+    odeSessionId: session.binding?.odeSessionId ?? randomUUID(),
+    providerId,
+    transport: deps.agent.getTransportForSession(sessionId),
+    nativeSessionId: sessionId,
+    capabilities: deps.agent.getCapabilitiesForSession(sessionId),
+    createdAt: session.binding?.createdAt ?? now,
+    updatedAt: now,
+  };
 
   if (session.platform !== deps.platform) {
     session.platform = deps.platform;

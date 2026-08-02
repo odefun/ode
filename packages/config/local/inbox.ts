@@ -3,6 +3,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { loadOdeConfig } from "./ode-store";
+import type { OdeRunEvent } from "@/shared/agent-protocol";
 
 // ---------------------------------------------------------------------------
 // Schema
@@ -105,6 +106,12 @@ export interface MessageThreadPage {
   page: number;
   pageSize: number;
   totalPages: number;
+}
+
+export interface OdeRunEventPage {
+  items: OdeRunEvent[];
+  total: number;
+  limit: number;
 }
 
 export interface EnsureMessageThreadParams {
@@ -336,11 +343,28 @@ function initializeDatabase(db: Database): void {
       updated_at             INTEGER NOT NULL
     );
   `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ode_run_event (
+      id              TEXT PRIMARY KEY,
+      thread_id       TEXT NOT NULL REFERENCES message_thread(id) ON DELETE CASCADE,
+      schema_version  INTEGER NOT NULL,
+      timestamp       INTEGER NOT NULL,
+      type            TEXT NOT NULL,
+      provider_id     TEXT NOT NULL,
+      session_id      TEXT NOT NULL,
+      run_id          TEXT,
+      item_id         TEXT,
+      data_json       TEXT NOT NULL,
+      raw_event_json  TEXT
+    );
+  `);
   db.exec("CREATE INDEX IF NOT EXISTS idx_message_thread_last_at ON message_thread(last_message_at DESC);");
   db.exec("CREATE INDEX IF NOT EXISTS idx_message_thread_source ON message_thread(source_kind, last_message_at DESC);");
   db.exec("CREATE INDEX IF NOT EXISTS idx_message_detail_thread_seq ON message_detail(thread_id, seq);");
   db.exec("CREATE INDEX IF NOT EXISTS idx_message_detail_question ON message_detail(question_source_id);");
   db.exec("CREATE INDEX IF NOT EXISTS idx_message_detail_status ON message_detail(status);");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_ode_run_event_thread_time ON ode_run_event(thread_id, timestamp);");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_ode_run_event_run ON ode_run_event(run_id, timestamp);");
 
   // Lightweight migrations for DBs created before the columns existed.
   // sqlite's `ALTER TABLE ... ADD COLUMN` is idempotent-friendly if we first
@@ -1018,13 +1042,107 @@ export function getMessageDetailById(detailId: string): MessageDetail | null {
   return row ? mapDetailRow(row) : null;
 }
 
+export function recordOdeRunEvents(threadKey: string, events: readonly OdeRunEvent[]): void {
+  if (events.length === 0) return;
+  const db = getDatabase();
+  const threadExists = db.query("SELECT 1 AS present FROM message_thread WHERE id = ?").get(threadKey);
+  if (!threadExists) return;
+  const insert = db.query(
+    `INSERT OR IGNORE INTO ode_run_event (
+       id, thread_id, schema_version, timestamp, type,
+       provider_id, session_id, run_id, item_id, data_json, raw_event_json
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+  db.transaction((batch: readonly OdeRunEvent[]) => {
+    for (const event of batch) {
+      insert.run(
+        event.id,
+        threadKey,
+        event.schemaVersion,
+        event.timestamp,
+        event.type,
+        event.providerId,
+        event.sessionId,
+        event.runId ?? null,
+        event.itemId ?? null,
+        toJsonText(event.data),
+        toJsonText(event.rawEvent ?? null),
+      );
+    }
+  })(events);
+}
+
+function mapOdeRunEventRow(row: Record<string, unknown>): OdeRunEvent {
+  return {
+    id: String(row.id),
+    schemaVersion: Number(row.schema_version) as OdeRunEvent["schemaVersion"],
+    timestamp: Number(row.timestamp),
+    type: String(row.type) as OdeRunEvent["type"],
+    providerId: String(row.provider_id) as OdeRunEvent["providerId"],
+    sessionId: String(row.session_id),
+    runId: typeof row.run_id === "string" ? row.run_id : undefined,
+    itemId: typeof row.item_id === "string" ? row.item_id : undefined,
+    data: safeJsonParse<Record<string, unknown>>(String(row.data_json)) ?? {},
+    rawEvent: typeof row.raw_event_json === "string"
+      ? safeJsonParse<Record<string, unknown>>(row.raw_event_json) ?? undefined
+      : undefined,
+  };
+}
+
+export function getOdeRunEvents(params: {
+  threadKey: string;
+  runId?: string;
+}): OdeRunEvent[] {
+  const db = getDatabase();
+  const rows = params.runId
+    ? db.query(
+        `SELECT * FROM ode_run_event
+         WHERE thread_id = ? AND run_id = ?
+         ORDER BY timestamp ASC, rowid ASC`
+      ).all(params.threadKey, params.runId)
+    : db.query(
+        `SELECT * FROM ode_run_event
+         WHERE thread_id = ?
+         ORDER BY timestamp ASC, rowid ASC`
+      ).all(params.threadKey);
+  return (rows as Array<Record<string, unknown>>).map(mapOdeRunEventRow);
+}
+
+export function getOdeRunEventPage(
+  threadKey: string,
+  params?: { limit?: number; includeRaw?: boolean }
+): OdeRunEventPage | null {
+  const db = getDatabase();
+  const threadExists = db.query("SELECT 1 AS present FROM message_thread WHERE id = ?").get(threadKey);
+  if (!threadExists) return null;
+  const limit = Math.max(1, Math.min(500, Math.floor(params?.limit ?? 100)));
+  const includeRaw = params?.includeRaw === true;
+  const filter = includeRaw ? "" : "AND type != 'provider.raw'";
+  const totalRow = db.query(
+    `SELECT COUNT(*) AS count FROM ode_run_event WHERE thread_id = ? ${filter}`
+  ).get(threadKey) as { count: number } | null;
+  const rows = db.query(
+    `SELECT * FROM (
+       SELECT * FROM ode_run_event
+       WHERE thread_id = ? ${filter}
+       ORDER BY timestamp DESC, rowid DESC
+       LIMIT ?
+     ) ORDER BY timestamp ASC`
+  ).all(threadKey, limit) as Array<Record<string, unknown>>;
+  return {
+    items: rows.map(mapOdeRunEventRow),
+    total: totalRow?.count ?? 0,
+    limit,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Test utilities
 // ---------------------------------------------------------------------------
 
 export function clearMessageStoreForTests(): void {
   const db = getDatabase();
-  db.exec("DELETE FROM message_detail; DELETE FROM message_thread;");
+  db.exec("DELETE FROM ode_run_event; DELETE FROM message_detail; DELETE FROM message_thread;");
 }
 
 export function closeMessageDatabaseForTests(): void {

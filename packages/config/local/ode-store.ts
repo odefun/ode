@@ -42,11 +42,9 @@ const EMPTY_TEMPLATE: OdeConfig = {
     claudecode: { enabled: true },
     codex: { enabled: true, models: [] },
     kimi: { enabled: true },
-    kiro: { enabled: true },
     kilo: { enabled: true, models: [] },
     qwen: { enabled: true },
     goose: { enabled: true },
-    gemini: { enabled: true },
     pi: { enabled: true, models: [] },
     openhands: { enabled: true, models: [] },
     codebuddy: { enabled: true, models: [] },
@@ -154,9 +152,6 @@ function normalizeConfig(config: OdeConfig): OdeConfig {
       kimi: {
         enabled: config.agents?.kimi?.enabled ?? true,
       },
-      kiro: {
-        enabled: config.agents?.kiro?.enabled ?? true,
-      },
       kilo: {
         enabled: config.agents?.kilo?.enabled ?? true,
         models: kiloModels,
@@ -166,9 +161,6 @@ function normalizeConfig(config: OdeConfig): OdeConfig {
       },
       goose: {
         enabled: config.agents?.goose?.enabled ?? true,
-      },
-      gemini: {
-        enabled: config.agents?.gemini?.enabled ?? true,
       },
       pi: {
         enabled: config.agents?.pi?.enabled ?? true,

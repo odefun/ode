@@ -15,6 +15,15 @@ function rawEvent(timestamp: number, record: Record<string, unknown>) {
 }
 
 describe("openhands stream status parsing", () => {
+  it("recognizes OpenHands system prompt setup records", () => {
+    const state = buildSessionMessageState([rawEvent(Date.now(), {
+      kind: "SystemPromptEvent",
+      source: "agent",
+    })]);
+
+    expect(state.phaseStatus).toBe("Preparing OpenHands context");
+  });
+
   it("renders startup progress while the CLI buffers JSON output", () => {
     const now = Date.now();
     const state = buildSessionMessageState([

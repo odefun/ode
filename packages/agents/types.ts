@@ -1,3 +1,11 @@
+import type {
+  AgentCapabilities,
+  AgentInput,
+  AgentInputPart,
+  AgentSessionBinding,
+  AgentTransport,
+} from "@/shared/agent-protocol";
+
 export interface OpenCodeMessage {
   text: string;
   messageType: "assistant" | "result" | "system" | "user" | "notify";
@@ -33,6 +41,15 @@ export interface OpenCodeMessageContext {
 export interface OpenCodeSessionInfo {
   sessionId: string;
   created: boolean;
+  binding?: AgentSessionBinding;
 }
 
-export type PromptPart = { type: "text"; text: string };
+export type PromptPart = AgentInputPart;
+
+export type {
+  AgentCapabilities,
+  AgentInput,
+  AgentInputPart,
+  AgentSessionBinding,
+  AgentTransport,
+} from "@/shared/agent-protocol";

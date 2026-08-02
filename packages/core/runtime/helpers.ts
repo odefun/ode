@@ -26,6 +26,13 @@ export function categorizeRuntimeError(
 ): { message: string; suggestion: string } {
   const errorStr = err instanceof Error ? err.message : String(err);
 
+  if (err instanceof Error && err.name === "OpenCodeIdlePromptError") {
+    return {
+      message: "OpenCode run became idle before completing",
+      suggestion: "Ode stopped the stale run. Retry in the same thread; a new turn can reuse the session history.",
+    };
+  }
+
   // Check upstream / session errors BEFORE the generic "timeout" rule below,
   // because 524 payloads also contain the word "timeout".
 

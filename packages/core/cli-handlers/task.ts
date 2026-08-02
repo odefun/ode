@@ -146,7 +146,7 @@ function printTaskHelp(): void {
       "  --time accepts ISO 8601, e.g. 2026-04-18T23:30:00+08:00",
       "  --thread is optional. When set, the task reuses the thread's session; when omitted, it posts as a fresh channel message.",
       "  --channel accepts either a raw channel id or a \"workspaceId::channelId\" value.",
-      "  --agent is optional; accepts a CLI provider id: opencode | claudecode | codex | kimi | kiro | kilo | qwen | goose | gemini.",
+      "  --agent is optional; accepts a CLI provider id: opencode | claudecode | codex | kimi | kilo | qwen | goose.",
       "           When omitted, the task uses the channel's default agent.",
     ].join("\n"),
   );

@@ -6,6 +6,11 @@ export type {
   OpenCodeMessageContext,
   OpenCodeOptions,
   OpenCodeSessionInfo,
+  AgentInput,
+  AgentInputPart,
+  AgentCapabilities,
+  AgentSessionBinding,
+  AgentTransport,
 } from "./types";
 
 const agent = getSelectedAgentProvider();

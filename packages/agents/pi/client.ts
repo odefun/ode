@@ -9,7 +9,9 @@ import {
   type SessionEnvironment as RuntimeSessionEnvironment,
 } from "../runtime/base";
 import { createCliThreadSessionManager } from "../runtime/cli-session";
+import { inspectCliProtocol } from "../runtime/protocol-drift";
 import type {
+  AgentInput,
   OpenCodeMessage,
   OpenCodeMessageContext,
   OpenCodeOptions,
@@ -26,6 +28,13 @@ type PiContentBlock = {
 export type PiJsonRecord = {
   type?: string;
   id?: string;
+  toolCallId?: string;
+  toolName?: string;
+  args?: Record<string, unknown>;
+  result?: {
+    content?: Array<{ type?: string; text?: string }> | string;
+    isError?: boolean;
+  };
   message?: {
     role?: string;
     content?: Array<PiContentBlock> | string;
@@ -47,6 +56,19 @@ export type PiJsonRecord = {
 const runtime = new CliAgentRuntime("Pi");
 const NEW_SESSIONS_MAX_ENTRIES = 1000;
 const newSessions = new BoundedSet<string>(NEW_SESSIONS_MAX_ENTRIES);
+const PI_RECORD_TYPES = [
+  "agent_start",
+  "turn_start",
+  "message_start",
+  "message_update",
+  "message_end",
+  "turn_end",
+  "agent_end",
+  "session",
+  "tool_execution_start",
+  "tool_execution_end",
+  "agent_settled",
+];
 const DEFAULT_PI_MODEL = "claude-sonnet-4-5-20250929";
 
 export const { createSession, getOrCreateSession } = createCliThreadSessionManager({
@@ -145,6 +167,11 @@ function publishPiRecord(record: PiJsonRecord, fallbackSessionId: string): void 
     properties: {
       record,
       recordType: rawType,
+      ...inspectCliProtocol({
+        providerName: "Pi",
+        recordType: rawType,
+        knownRecordTypes: PI_RECORD_TYPES,
+      }),
     },
   });
 }
@@ -152,7 +179,7 @@ function publishPiRecord(record: PiJsonRecord, fallbackSessionId: string): void 
 export async function sendMessage(
   channelId: string,
   sessionId: string,
-  message: string,
+  input: AgentInput,
   workingPath: string,
   options?: OpenCodeOptions,
   context?: OpenCodeMessageContext
@@ -163,7 +190,7 @@ export async function sendMessage(
   try {
     return await runtime.withSessionLock(sessionKey, async () => {
       const agent = options?.agent;
-      const parts = buildPromptParts(channelId, message, { ...options, agent }, context);
+      const parts = buildPromptParts(channelId, input, { ...options, agent }, context);
       const prompt = buildPromptText(parts);
       const piPrompt = buildSystemWrappedPrompt(buildSystemPrompt(context?.slack), prompt);
       const envOverrides = runtime.getSessionEnvironment(sessionId);

@@ -4,20 +4,19 @@ import { buildOpenCodeCommand } from "../opencode/client";
 import { buildClaudeCommand, buildClaudeCommandArgs } from "../claude/client";
 import { buildCodexCommand, buildCodexCommandArgs } from "../codex/client";
 import { buildKimiCommand, buildKimiCommandArgs } from "../kimi/client";
-import { buildKiroCommand, buildKiroCommandArgs } from "../kiro/client";
 import { buildKiloCommand, buildKiloCommandArgs } from "../kilo/client";
 import { buildQwenCommand, buildQwenCommandArgs } from "../qwen/client";
 import { buildGooseCommand, buildGooseCommandArgs } from "../goose/client";
-import { buildGeminiCommand, buildGeminiCommandArgs } from "../gemini/client";
 import { buildPiCommand, buildPiCommandArgs, parsePiResponse } from "../pi/client";
 import { buildOpenHandsCommand, buildOpenHandsCommandArgs, parseOpenHandsResponse } from "../openhands/client";
 import { buildCodeBuddyCommand, buildCodeBuddyCommandArgs, parseCodeBuddyResponse } from "../codebuddy/client";
 import { buildCrushCommand, buildCrushCommandArgs, parseCrushResponse } from "../crush/client";
+import { createAgentInput } from "@/shared/agent-protocol";
 
 describe("agent cli command formatting", () => {
   it("builds the final Claude CLI command", () => {
     const message = "hello world";
-    const parts = buildPromptParts("C123", message);
+    const parts = buildPromptParts("C123", createAgentInput(message));
     const prompt = buildPromptText(parts);
     const systemPrompt = buildSystemPrompt({
       channelId: "C123",
@@ -180,7 +179,7 @@ describe("agent cli command formatting", () => {
 
     expect(command).toContain("codex exec --json --skip-git-repo-check");
     expect(command).toContain("--json");
-    expect(command).toContain("--yolo");
+    expect(command).toContain("--dangerously-bypass-approvals-and-sandbox");
     expect(command).toContain("--model gpt-5-codex");
     expect(command).toContain("session-3");
     expect(command).toContain("'hello from codex'");
@@ -199,7 +198,7 @@ describe("agent cli command formatting", () => {
     expect(command).toContain("codex exec --json --skip-git-repo-check");
     expect(command).toContain("--json");
     expect(command).toContain("--sandbox read-only");
-    expect(command).not.toContain("--yolo");
+    expect(command).not.toContain("--dangerously-bypass-approvals-and-sandbox");
     expect(command).toContain("session-3");
     expect(command).toContain("'plan this change'");
   });
@@ -260,22 +259,6 @@ describe("agent cli command formatting", () => {
     expect(command).toContain("-p 'hello from kimi'");
   });
 
-  it("builds the Kiro non-interactive command", () => {
-    const args = buildKiroCommandArgs({
-      isNewSession: false,
-      prompt: "hello from kiro",
-      agent: "plan",
-    });
-    const command = buildKiroCommand("kiro-cli", args);
-
-    expect(command).toContain("kiro-cli chat");
-    expect(command).toContain("--no-interactive");
-    expect(command).toContain("--trust-all-tools");
-    expect(command).toContain("--resume");
-    expect(command).toContain("--agent plan");
-    expect(command).toContain("'hello from kiro'");
-  });
-
   it("builds the Kilo run command", () => {
     const args = buildKiloCommandArgs({
       sessionId: "session-7",
@@ -285,7 +268,8 @@ describe("agent cli command formatting", () => {
     });
     const command = buildKiloCommand(args);
 
-    expect(command).toContain("kilo run --auto --format json");
+    expect(command).toContain("kilo run --format json");
+    expect(command).not.toContain("--auto");
     expect(command).toContain("--session session-7");
     expect(command).toContain("--agent plan");
     expect(command).toContain("--model openai/gpt-4");
@@ -302,7 +286,7 @@ describe("agent cli command formatting", () => {
     const command = buildQwenCommand(args);
 
     expect(command).toContain("--approval-mode plan");
-    expect(command).not.toContain("--yolo");
+    expect(command).not.toContain("--approval-mode yolo");
     expect(command).toContain("--resume session-5");
     expect(command).toContain("-p 'plan migration'");
   });
@@ -315,8 +299,10 @@ describe("agent cli command formatting", () => {
     });
     const command = buildQwenCommand(args);
 
-    expect(command).toContain("--yolo");
+    expect(command).toContain("--approval-mode auto");
+    expect(command).not.toContain("--approval-mode yolo");
     expect(command).not.toContain("--approval-mode plan");
+    expect(command).toContain("--max-wall-time 10m --max-tool-calls 100");
   });
 
   it("builds the Goose run command", () => {
@@ -343,36 +329,6 @@ describe("agent cli command formatting", () => {
 
     expect(command).toContain("--resume");
     expect(command).toContain("--name session-9");
-  });
-
-  it("builds the Gemini plan-mode command", () => {
-    const args = buildGeminiCommandArgs({
-      sessionId: "session-10",
-      isNewSession: false,
-      prompt: "plan migration",
-      approvalMode: "plan",
-      model: "gemini-3.1-flash-lite",
-    });
-    const command = buildGeminiCommand(args);
-
-    expect(command).toContain("gemini");
-    expect(command).toContain("--output-format stream-json");
-    expect(command).toContain("--approval-mode plan");
-    expect(command).toContain("--model gemini-3.1-flash-lite");
-    expect(command).toContain("--resume session-10");
-    expect(command).toContain("-p 'plan migration'");
-  });
-
-  it("builds the Gemini default automation command", () => {
-    const args = buildGeminiCommandArgs({
-      sessionId: "session-11",
-      isNewSession: true,
-      prompt: "implement feature",
-    });
-    const command = buildGeminiCommand(args);
-
-    expect(command).toContain("--approval-mode yolo");
-    expect(command).not.toContain("--resume");
   });
 
   it("builds the Pi json command", () => {
@@ -415,7 +371,8 @@ describe("agent cli command formatting", () => {
     expect(command).toContain("--include-partial-messages");
     expect(command).toContain("--session-id session-13");
     expect(command).toContain("--model gpt-5.1");
-    expect(command).toContain("--permission-mode bypassPermissions");
+    expect(command).toContain("--permission-mode dontAsk");
+    expect(command).not.toContain("bypassPermissions");
   });
 
   it("builds the Crush run command", () => {
@@ -431,6 +388,17 @@ describe("agent cli command formatting", () => {
     expect(command).toContain("--model chainbot/gpt-5.1");
     expect(command).toContain("--session session-14");
     expect(command).toContain("'hello from crush'");
+  });
+
+  it("lets Crush use its own configured default model", () => {
+    const command = buildCrushCommand(buildCrushCommandArgs({
+      sessionId: "session-14",
+      prompt: "hello from crush",
+      isNewSession: true,
+    }));
+
+    expect(command).toContain("crush run --verbose");
+    expect(command).not.toContain("--model");
   });
 
   it("parses new provider final responses", () => {

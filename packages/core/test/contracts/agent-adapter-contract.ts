@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { AgentAdapter } from "@/core/types";
+import { createAgentInput } from "@/shared/agent-protocol";
 
 export function runAgentAdapterContractSuite(name: string, makeAdapter: () => AgentAdapter): void {
   describe(`AgentAdapter contract: ${name}`, () => {
@@ -21,7 +22,12 @@ export function runAgentAdapterContractSuite(name: string, makeAdapter: () => Ag
       expect(typeof session.sessionId).toBe("string");
       expect(session.sessionId.length).toBeGreaterThan(0);
 
-      const responses = await adapter.sendMessage("C1", session.sessionId, "hello", "/tmp");
+      const responses = await adapter.sendMessage(
+        "C1",
+        session.sessionId,
+        createAgentInput("hello"),
+        "/tmp"
+      );
       expect(Array.isArray(responses)).toBe(true);
       if (responses[0]) {
         expect(typeof responses[0].text).toBe("string");

@@ -307,7 +307,6 @@ async function setupWorkspaces(rl: Interface, config: OdeConfig): Promise<OdeCon
       const workspace: WorkspaceConfig = {
         ...discoveredWorkspace,
         type: discoveredWorkspace.type,
-        slackStatusMode: discoveredWorkspace.slackStatusMode === "legacy" ? "legacy" : "ai_card",
         slackAppToken: discoveredWorkspace.slackAppToken ?? "",
         slackBotToken: discoveredWorkspace.slackBotToken ?? "",
         discordBotToken: discoveredWorkspace.discordBotToken ?? "",

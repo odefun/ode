@@ -28,3 +28,15 @@ export function extractEventSessionId(event: Record<string, unknown> | undefined
 
   return getSessionIdFromRecord(event);
 }
+
+export function extractEventRootSessionId(
+  event: Record<string, unknown> | undefined
+): string | undefined {
+  if (!event) return undefined;
+  const context = event.odeContext && typeof event.odeContext === "object"
+    ? event.odeContext as Record<string, unknown>
+    : undefined;
+  if (typeof context?.rootSessionID === "string") return context.rootSessionID;
+  if (typeof context?.rootSessionId === "string") return context.rootSessionId;
+  return undefined;
+}

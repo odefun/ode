@@ -155,6 +155,11 @@ export function applyOpenHandsRecordToState(
     return;
   }
 
+  if (record.kind === "SystemPromptEvent") {
+    state.phaseStatus = "Preparing OpenHands context";
+    return;
+  }
+
   if (record.kind === "ActionEvent") {
     applyOpenHandsAction(state, record, toolById);
     return;

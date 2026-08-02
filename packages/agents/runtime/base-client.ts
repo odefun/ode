@@ -1,5 +1,5 @@
 import { CliAgentRuntime, runCliJsonCommand, type SessionEnvironment } from "./base";
-import type { OpenCodeMessage, OpenCodeMessageContext, OpenCodeOptions } from "../types";
+import type { AgentInput, OpenCodeMessage, OpenCodeMessageContext, OpenCodeOptions } from "../types";
 import { log } from "@/utils";
 
 export abstract class AgentBaseClient<TRecord> {
@@ -72,7 +72,7 @@ export abstract class AgentBaseClient<TRecord> {
   abstract sendMessage(
     channelId: string,
     sessionId: string,
-    message: string,
+    input: AgentInput,
     workingPath: string,
     options?: OpenCodeOptions,
     context?: OpenCodeMessageContext

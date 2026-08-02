@@ -55,7 +55,7 @@ describe("kilo stream status parsing", () => {
       { content: "Inspect workspace", status: "in_progress" },
       { content: "Write report", status: "pending" },
     ]);
-    expect(text).toContain("*Tasks*");
+    expect(text).toContain("**Plan**");
     expect(text).toContain("- [~] Inspect workspace");
     expect(text).toContain("- [ ] Write report");
   });
