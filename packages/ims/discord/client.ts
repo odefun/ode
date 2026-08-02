@@ -51,6 +51,8 @@ import { DiscordStatusMessageIndex } from "@/ims/discord/state/status-message-in
 import type { RawInboundEvent } from "@/core/model/raw-inbound-event";
 import { downloadAttachments } from "@/ims/shared/attachment-store";
 import type { InboundAttachment } from "@/shared/agent-protocol";
+import { requireDiscordWorkspaceClient } from "@/ims/discord/workspace-routing";
+import { DISCORD_CHANNEL_NOT_TEXT_BASED_CODE } from "@/shared/delivery/permanent-error";
 
 const DISCORD_MESSAGE_LIMIT = 2000;
 const DISCORD_THREAD_NAME_LIMIT = 25;
@@ -142,9 +144,44 @@ async function maybeHandleLauncherCommand(params: {
 }
 async function resolveTextChannel(channelId: string, processorId?: string) {
   const attempts: string[] = [];
+  // Collect Discord API error codes across every fetch attempt so the
+  // caller can detect permanent-access failures (Unknown Channel / Missing
+  // Access / etc.) even though we re-throw a generic wrapper Error below.
+  // discord.js surfaces these on `err.code` as numbers; we forward them on
+  // the wrapper as `discordErrorCodes` and also expose the first as `code`
+  // so `isPermanentChannelError` can pick it up via the `code` shape.
+  //
+  // The pinned bot's code is tracked separately: when `processorId` is
+  // provided we know which bot actually owns the channel, so its result
+  // is authoritative and unrelated bots' "permanent" errors (e.g. another
+  // workspace's bot legitimately returning `Missing Access` for a channel
+  // it cannot see) MUST NOT promote the wrapper to permanent. See PR #211
+  // discussion: "Avoid disabling Discord jobs on mixed fetch failures".
+  const discordErrorCodes: number[] = [];
+  let pinnedBotErrorCode: number | undefined;
+  let pinnedBotAttempted = false;
+  // Count every fetch attempt that ended in a thrown error — not just the
+  // subset that carried a numeric `err.code`. The wrapper's
+  // `isPermanentChannelError` classification must NOT promote to permanent
+  // when any attempt failed transiently (e.g. ECONNRESET, generic network
+  // error), because that bot might succeed on retry. See PR #211 discussion:
+  // "Require every Discord fetch attempt to be permanent".
+  let totalFailedAttempts = 0;
+  const captureCode = (error: unknown, isPinnedBot: boolean) => {
+    totalFailedAttempts += 1;
+    if (typeof error === "object" && error !== null) {
+      const code = (error as { code?: unknown }).code;
+      if (typeof code === "number") {
+        discordErrorCodes.push(code);
+        if (isPinnedBot) pinnedBotErrorCode = code;
+      }
+    }
+  };
+
   if (processorId) {
     const pinnedClient = discordClientByProcessorId.get(processorId);
     if (pinnedClient) {
+      pinnedBotAttempted = true;
       try {
         const channel = await pinnedClient.channels.fetch(channelId);
         if (channel && channel.isTextBased()) {
@@ -152,6 +189,7 @@ async function resolveTextChannel(channelId: string, processorId?: string) {
         }
         attempts.push(`bot=${pinnedClient.user?.id || "unknown"}: channel_not_text_or_missing`);
       } catch (error) {
+        captureCode(error, true);
         const errorMessage = error instanceof Error ? error.message : String(error);
         attempts.push(`bot=${pinnedClient.user?.id || "unknown"}: ${errorMessage}`);
       }
@@ -167,6 +205,7 @@ async function resolveTextChannel(channelId: string, processorId?: string) {
       }
       attempts.push(`bot=${client.user?.id || "unknown"}: channel_not_text_or_missing`);
     } catch (error) {
+      captureCode(error, false);
       const errorMessage = error instanceof Error ? error.message : String(error);
       attempts.push(`bot=${client.user?.id || "unknown"}: ${errorMessage}`);
     }
@@ -180,7 +219,62 @@ async function resolveTextChannel(channelId: string, processorId?: string) {
     });
   }
 
-  throw new Error(`Discord channel ${channelId} is not text-based or inaccessible`);
+  const wrapper = new Error(`Discord channel ${channelId} is not text-based or inaccessible`);
+  if (discordErrorCodes.length > 0) {
+    const PERMANENT_PRIORITY = new Set([10003, 50001, 50013, 50007]);
+
+    // Pick which code to forward as the `code` field consumed by
+    // `isPermanentChannelError`. Rules:
+    //   1. If a pinned bot was attempted, its outcome is authoritative —
+    //      forward its code (if any). Other bots' permanent codes for the
+    //      same channel are unrelated noise.
+    //   2. If no pinned bot was attempted (e.g. cron top-level send with
+    //      no processorId), only treat the failure as permanent when every
+    //      failed attempt carried a permanent code. A transient failure
+    //      (ECONNRESET, network blip) without a numeric `code` would not
+    //      appear in `discordErrorCodes`, so counting only those would let
+    //      an unrelated bot's permanent code promote the wrapper even though
+    //      a retry might succeed. We therefore also require that the number
+    //      of captured permanent codes equals the number of failed attempts.
+    //
+    //      When the attempts are mixed (some permanent, some not), we must
+    //      NOT forward any permanent code as the wrapper's `code` field —
+    //      otherwise `isPermanentChannelError` (which classifies purely on
+    //      the numeric `code`) would auto-disable the cron even though at
+    //      least one retryable failure was in the mix. We fall back to the
+    //      first *non-permanent* code (still useful diagnostic signal on
+    //      the wrapper without triggering permanent classification); if
+    //      every captured code is permanent but `totalFailedAttempts`
+    //      exceeds that count (i.e. an untyped transient error is also in
+    //      play), we suppress the code entirely. See PR #211 discussion:
+    //      "Avoid forwarding a permanent code after a mixed Discord
+    //      failure".
+    let forwardedCode: number | undefined;
+    if (pinnedBotAttempted) {
+      forwardedCode = pinnedBotErrorCode;
+    } else {
+      const permanentCodes = discordErrorCodes.filter((c) => PERMANENT_PRIORITY.has(c));
+      const allAttemptsPermanent =
+        permanentCodes.length === totalFailedAttempts && totalFailedAttempts > 0;
+      if (allAttemptsPermanent) {
+        forwardedCode = permanentCodes[0];
+      } else {
+        // Mixed attempts: never expose a permanent code on the wrapper.
+        // Prefer the first non-permanent numeric code for diagnostics; if
+        // no non-permanent code was captured, leave `code` undefined so
+        // the failure stays classified as retryable.
+        const nonPermanentCode = discordErrorCodes.find((c) => !PERMANENT_PRIORITY.has(c));
+        forwardedCode = nonPermanentCode;
+      }
+    }
+
+    if (forwardedCode !== undefined) {
+      (wrapper as Error & { code?: number; discordErrorCodes?: number[] }).code = forwardedCode;
+    }
+    (wrapper as Error & { code?: number; discordErrorCodes?: number[] }).discordErrorCodes =
+      [...discordErrorCodes];
+  }
+  throw wrapper;
 }
 
 async function buildDiscordContext(
@@ -250,19 +344,66 @@ export async function sendChannelMessage(
 ): Promise<string | undefined> {
   try {
     const channel = await resolveTextChannel(channelId, processorId);
-    const formattedText = markdownToDiscord(text);
-    const chunks = splitForDiscord(formattedText, DISCORD_MESSAGE_LIMIT);
-    let firstId: string | undefined;
-    for (let index = 0; index < chunks.length; index += 1) {
-      const chunk = chunks[index] ?? "";
-      const sent = await channel.send(chunk);
-      firstId = firstId || sent.id;
-      statusMessageIndex.setThreadId(sent.id, channelId);
-    }
-    return firstId;
+    return await sendResolvedChannelMessage(channelId, text, channel);
   } catch (error) {
     log.warn("Failed to send Discord top-level channel message", {
       channelId,
+      textLength: text.length,
+      error: String(error),
+    });
+    throw error;
+  }
+}
+
+async function sendResolvedChannelMessage(
+  channelId: string,
+  text: string,
+  channel: { send: (text: string) => Promise<{ id: string }> },
+): Promise<string | undefined> {
+  const formattedText = markdownToDiscord(text);
+  const chunks = splitForDiscord(formattedText, DISCORD_MESSAGE_LIMIT);
+  let firstId: string | undefined;
+  for (let index = 0; index < chunks.length; index += 1) {
+    const chunk = chunks[index] ?? "";
+    const sent = await channel.send(chunk);
+    firstId = firstId || sent.id;
+    statusMessageIndex.setThreadId(sent.id, channelId);
+  }
+  return firstId;
+}
+
+function isSendableDiscordChannel(
+  channel: unknown,
+): channel is { send: (text: string) => Promise<{ id: string }> } {
+  return typeof channel === "object"
+    && channel !== null
+    && "send" in channel
+    && typeof channel.send === "function";
+}
+
+export async function sendChannelMessageForWorkspace(
+  channelId: string,
+  text: string,
+  workspaceId: string,
+): Promise<string | undefined> {
+  try {
+    const client = requireDiscordWorkspaceClient({
+      workspaceId,
+      configuredWorkspaceIds: getConfiguredDiscordRuntimeBots().map((bot) => bot.workspaceId),
+      connectedClients: discordClients,
+    });
+    const channel = await client.channels.fetch(channelId);
+    if (!channel || !channel.isTextBased() || !isSendableDiscordChannel(channel)) {
+      throw Object.assign(
+        new Error(`Discord channel ${channelId} is not text-based or inaccessible`),
+        { code: DISCORD_CHANNEL_NOT_TEXT_BASED_CODE },
+      );
+    }
+    return await sendResolvedChannelMessage(channelId, text, channel);
+  } catch (error) {
+    log.warn("Failed to send Discord top-level channel message for workspace", {
+      channelId,
+      workspaceId,
       textLength: text.length,
       error: String(error),
     });

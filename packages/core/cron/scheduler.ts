@@ -9,6 +9,7 @@ import {
 } from "@/config";
 import {
   type CronJobRecord,
+  disableCronJob,
   getCronJobById,
   listEnabledCronJobs,
   markCronJobCompleted,
@@ -35,8 +36,12 @@ import { buildMessageOptions } from "@/core/runtime/message-options";
 import { buildFinalResponseText, categorizeRuntimeError } from "@/core/runtime/helpers";
 import { sendSlackChannelMessage } from "@/core/runtime/slack-senders";
 import { buildSessionEnvironment, prepareSessionWorkspace } from "@/core/session";
-import { sendChannelMessage as sendDiscordChannelMessage } from "@/ims/discord/client";
+import {
+  sendChannelMessage as sendDiscordChannelMessage,
+  sendChannelMessageForWorkspace as sendDiscordChannelMessageForWorkspace,
+} from "@/ims/discord/client";
 import { sendChannelMessage as sendLarkChannelMessage } from "@/ims/lark/client";
+import { isPermanentChannelError } from "@/shared/delivery/permanent-error";
 import { log } from "@/utils";
 import { createAgentInput } from "@/shared/agent-protocol";
 
@@ -137,9 +142,30 @@ async function sendResultToChannel(
     return sendSlackChannelMessage(job.channelId, text);
   }
   if (job.platform === "discord") {
+    if (job.workspaceId) {
+      return sendDiscordChannelMessageForWorkspace(job.channelId, text, job.workspaceId);
+    }
+    // Legacy rows may predate workspace snapshots. Keep their existing
+    // unpinned fallback rather than guessing a workspace, but all newly
+    // created cron rows use the exact stored workspace route above.
     return sendDiscordChannelMessage(job.channelId, text);
   }
-  return sendLarkChannelMessage(job.channelId, text);
+  const larkResult = await sendLarkChannelMessage(job.channelId, text);
+  if (larkResult === undefined) {
+    // `sendLarkChannelMessage` returns `undefined` (without throwing) only
+    // when `getLarkCredentialsForProcessor` cannot find credentials for the
+    // channel — i.e. the Lark workspace/channel config has been removed.
+    // Without this guard the cron scheduler treats the run as delivered,
+    // marks it completed, and the job stays enabled and silently
+    // undelivered forever (see PR #211 review: "Treat undefined sends as
+    // delivery failures"). Throwing a message whose text matches
+    // `isPermanentChannelError` lets the existing catch-branch auto-
+    // disable this job the same way an explicit `chat_not_found` would.
+    throw new Error(
+      `Lark send returned no message id for channel ${job.channelId} (chat_not_found or credentials missing)`,
+    );
+  }
+  return larkResult;
 }
 
 /**
@@ -266,6 +292,57 @@ async function prepareCronSession(job: CronJobRecord, runId: string): Promise<{
   return { session, sessionId, cwd, created };
 }
 
+/**
+ * Auto-disable a cron job whose destination channel is permanently
+ * unreachable (bot kicked, channel archived, token revoked, etc.). Without
+ * this, every cron tick would re-attempt the same send and capture an
+ * identical Sentry event for the lifetime of the daemon — see
+ * `isPermanentChannelError` for the precise classification.
+ *
+ * Best-effort: we never let bookkeeping failures here shadow the original
+ * delivery error. The function does NOT throw.
+ */
+async function disableCronJobForPermanentChannelError(
+  job: CronJobRecord,
+  error: unknown,
+  agentResultDetailId: string | null,
+): Promise<void> {
+  const reason = error instanceof Error ? error.message : String(error);
+  const summary = `auto-disabled: destination channel unreachable (${reason})`;
+  if (agentResultDetailId) {
+    try {
+      failAgentResult({ detailId: agentResultDetailId, errorText: summary });
+    } catch (failError) {
+      log.warn("Failed to mark cron agent_result detail as failed during auto-disable", {
+        detailId: agentResultDetailId,
+        error: String(failError),
+      });
+    }
+  }
+  try {
+    disableCronJob(job.id);
+  } catch (disableError) {
+    log.warn("Failed to disable cron job after permanent channel error", {
+      cronJobId: job.id,
+      error: String(disableError),
+    });
+  }
+  try {
+    markCronJobFailed(job.id, summary);
+  } catch (markError) {
+    log.warn("Failed to mark auto-disabled cron job as failed", {
+      cronJobId: job.id,
+      error: String(markError),
+    });
+  }
+  log.warn("Auto-disabled cron job: destination channel unreachable", {
+    cronJobId: job.id,
+    title: job.title,
+    channelId: job.channelId,
+    error: reason,
+  });
+}
+
 async function runCronJob(job: CronJobRecord, minuteStartMs: number): Promise<void> {
   const agent = createAgentAdapter();
   const runId = getCronRunId(minuteStartMs);
@@ -351,7 +428,22 @@ async function runCronJob(job: CronJobRecord, minuteStartMs: number): Promise<vo
     );
     const finalText = buildFinalResponseText(responses) ?? "_Done_";
 
-    const realThreadId = await sendResultToChannel(job, finalText);
+    let realThreadId: string | undefined;
+    try {
+      realThreadId = await sendResultToChannel(job, finalText);
+    } catch (sendError) {
+      // The agent turn succeeded, but we can't deliver the result. If the
+      // channel is permanently unreachable (bot kicked, channel archived,
+      // token revoked), auto-disable the job so the scheduler stops
+      // generating identical Sentry events on every tick. Transient send
+      // failures fall through to the generic error handler below and the
+      // job stays enabled for the next tick.
+      if (isPermanentChannelError(sendError)) {
+        await disableCronJobForPermanentChannelError(job, sendError, agentResultDetailId);
+        return;
+      }
+      throw sendError;
+    }
     if (realThreadId) {
       seedCronChannelThreadSession({
         platform: job.platform,
@@ -410,6 +502,34 @@ async function runCronJob(job: CronJobRecord, minuteStartMs: number): Promise<vo
       const failureText = `*Cron job failed:* ${job.title}\n${message}`;
       await sendResultToChannel(job, failureText);
     } catch (notifyError) {
+      // If the failure-notification itself hits a permanent channel error,
+      // the destination is the real problem (not the agent turn). Auto-
+      // disable so we don't spam the same channel on every tick. We
+      // intentionally check the *notify* error here, not the original
+      // `error`, because the original could be a transient agent timeout
+      // while the channel is still healthy.
+      if (isPermanentChannelError(notifyError)) {
+        try {
+          disableCronJob(job.id);
+          markCronJobFailed(
+            job.id,
+            `auto-disabled: channel unreachable (${message})`,
+          );
+          log.warn("Auto-disabled cron job: destination channel unreachable", {
+            cronJobId: job.id,
+            title: job.title,
+            channelId: job.channelId,
+            originalError: message,
+            sendError: String(notifyError),
+          });
+        } catch (disableError) {
+          log.warn("Failed to auto-disable cron job after permanent channel error", {
+            cronJobId: job.id,
+            error: String(disableError),
+          });
+        }
+        return;
+      }
       log.warn("Failed to send cron job failure notification", {
         cronJobId: job.id,
         error: String(notifyError),
