@@ -384,6 +384,31 @@ export function patchCronJob(id: string, params: PatchCronJobParams): CronJobRec
   return updateCronJob(id, merged);
 }
 
+/**
+ * Directly flip `enabled` to 0 without re-validating the rest of the cron
+ * row. Unlike `patchCronJob`, this does NOT re-resolve the row's channel
+ * via `getChannelSnapshot`, so it is safe to call when the destination
+ * channel was removed from the local config — which is exactly the
+ * scenario that motivates auto-disable in the first place (bot kicked,
+ * workspace re-onboarded, channel id stale, etc.).
+ *
+ * Returns `true` if a row actually transitioned from enabled→disabled, so
+ * callers can avoid duplicate log/notification work if another writer beat
+ * them to it. A missing row returns `false` as well.
+ */
+export function disableCronJob(id: string): boolean {
+  const db = getDatabase();
+  const result = db.query(`
+    UPDATE cron_jobs
+    SET
+      enabled = 0,
+      updated_at = ?
+    WHERE id = ?
+      AND enabled = 1
+  `).run(Date.now(), id);
+  return result.changes > 0;
+}
+
 export function markCronJobTriggered(id: string, minuteStartMs: number): boolean {
   const db = getDatabase();
   const result = db.query(`
