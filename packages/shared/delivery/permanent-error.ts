@@ -57,12 +57,18 @@ const PERMANENT_MESSAGE_TOKENS = [
   "chat does not exist",
 ];
 
-// Discord.js surfaces the raw API code on `err.code` as a number.
-const PERMANENT_DISCORD_CODES = new Set<number>([
+export const DISCORD_WORKSPACE_NOT_CONFIGURED_CODE = "DISCORD_WORKSPACE_NOT_CONFIGURED";
+export const DISCORD_CHANNEL_NOT_TEXT_BASED_CODE = "DISCORD_CHANNEL_NOT_TEXT_BASED";
+
+// Discord.js surfaces API codes on `err.code`; Ode adds stable string codes
+// for local configuration failures that likewise need human intervention.
+const PERMANENT_DISCORD_CODES = new Set<number | string>([
   10003, // Unknown Channel
   50001, // Missing Access
   50013, // Missing Permissions
   50007, // Cannot send messages to this user
+  DISCORD_WORKSPACE_NOT_CONFIGURED_CODE,
+  DISCORD_CHANNEL_NOT_TEXT_BASED_CODE,
 ]);
 
 function stringifyError(err: unknown): string {
@@ -83,7 +89,7 @@ export function isPermanentChannelError(err: unknown): boolean {
   }
   if (typeof err === "object" && err !== null) {
     const code = (err as { code?: unknown }).code;
-    if (typeof code === "number" && PERMANENT_DISCORD_CODES.has(code)) {
+    if ((typeof code === "number" || typeof code === "string") && PERMANENT_DISCORD_CODES.has(code)) {
       return true;
     }
     // Slack SDK exposes the API error string on `err.data.error`.

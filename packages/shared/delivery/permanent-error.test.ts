@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { isPermanentChannelError } from "./permanent-error";
+import {
+  DISCORD_CHANNEL_NOT_TEXT_BASED_CODE,
+  DISCORD_WORKSPACE_NOT_CONFIGURED_CODE,
+  isPermanentChannelError,
+} from "./permanent-error";
 
 describe("isPermanentChannelError", () => {
   test("matches Slack channel_not_found in message", () => {
@@ -37,6 +41,17 @@ describe("isPermanentChannelError", () => {
     expect(
       isPermanentChannelError(Object.assign(new Error("Unknown Channel"), { code: 10003 })),
     ).toBe(true);
+  });
+
+  test("matches Discord workspace routing errors that require configuration changes", () => {
+    expect(isPermanentChannelError(Object.assign(
+      new Error("Discord workspace ws-1 is no longer configured"),
+      { code: DISCORD_WORKSPACE_NOT_CONFIGURED_CODE },
+    ))).toBe(true);
+    expect(isPermanentChannelError(Object.assign(
+      new Error("Discord channel 123 is not text-based"),
+      { code: DISCORD_CHANNEL_NOT_TEXT_BASED_CODE },
+    ))).toBe(true);
   });
 
   test("matches the Discord resolveTextChannel wrapper when it carries a DiscordAPIError code", () => {

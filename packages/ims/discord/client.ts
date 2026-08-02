@@ -49,6 +49,8 @@ import {
 } from "@/ims/discord/utils/rate-limit";
 import { DiscordStatusMessageIndex } from "@/ims/discord/state/status-message-index";
 import type { RawInboundEvent } from "@/core/model/raw-inbound-event";
+import { requireDiscordWorkspaceClient } from "@/ims/discord/workspace-routing";
+import { DISCORD_CHANNEL_NOT_TEXT_BASED_CODE } from "@/shared/delivery/permanent-error";
 
 const DISCORD_MESSAGE_LIMIT = 2000;
 const DISCORD_THREAD_NAME_LIMIT = 25;
@@ -317,19 +319,66 @@ export async function sendChannelMessage(
 ): Promise<string | undefined> {
   try {
     const channel = await resolveTextChannel(channelId, processorId);
-    const formattedText = markdownToDiscord(text);
-    const chunks = splitForDiscord(formattedText, DISCORD_MESSAGE_LIMIT);
-    let firstId: string | undefined;
-    for (let index = 0; index < chunks.length; index += 1) {
-      const chunk = chunks[index] ?? "";
-      const sent = await channel.send(chunk);
-      firstId = firstId || sent.id;
-      statusMessageIndex.setThreadId(sent.id, channelId);
-    }
-    return firstId;
+    return await sendResolvedChannelMessage(channelId, text, channel);
   } catch (error) {
     log.warn("Failed to send Discord top-level channel message", {
       channelId,
+      textLength: text.length,
+      error: String(error),
+    });
+    throw error;
+  }
+}
+
+async function sendResolvedChannelMessage(
+  channelId: string,
+  text: string,
+  channel: { send: (text: string) => Promise<{ id: string }> },
+): Promise<string | undefined> {
+  const formattedText = markdownToDiscord(text);
+  const chunks = splitForDiscord(formattedText, DISCORD_MESSAGE_LIMIT);
+  let firstId: string | undefined;
+  for (let index = 0; index < chunks.length; index += 1) {
+    const chunk = chunks[index] ?? "";
+    const sent = await channel.send(chunk);
+    firstId = firstId || sent.id;
+    statusMessageIndex.setThreadId(sent.id, channelId);
+  }
+  return firstId;
+}
+
+function isSendableDiscordChannel(
+  channel: unknown,
+): channel is { send: (text: string) => Promise<{ id: string }> } {
+  return typeof channel === "object"
+    && channel !== null
+    && "send" in channel
+    && typeof channel.send === "function";
+}
+
+export async function sendChannelMessageForWorkspace(
+  channelId: string,
+  text: string,
+  workspaceId: string,
+): Promise<string | undefined> {
+  try {
+    const client = requireDiscordWorkspaceClient({
+      workspaceId,
+      configuredWorkspaceIds: getConfiguredDiscordRuntimeBots().map((bot) => bot.workspaceId),
+      connectedClients: discordClients,
+    });
+    const channel = await client.channels.fetch(channelId);
+    if (!channel || !channel.isTextBased() || !isSendableDiscordChannel(channel)) {
+      throw Object.assign(
+        new Error(`Discord channel ${channelId} is not text-based or inaccessible`),
+        { code: DISCORD_CHANNEL_NOT_TEXT_BASED_CODE },
+      );
+    }
+    return await sendResolvedChannelMessage(channelId, text, channel);
+  } catch (error) {
+    log.warn("Failed to send Discord top-level channel message for workspace", {
+      channelId,
+      workspaceId,
       textLength: text.length,
       error: String(error),
     });

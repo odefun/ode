@@ -36,7 +36,10 @@ import { buildMessageOptions } from "@/core/runtime/message-options";
 import { buildFinalResponseText, categorizeRuntimeError } from "@/core/runtime/helpers";
 import { sendSlackChannelMessage } from "@/core/runtime/slack-senders";
 import { buildSessionEnvironment, prepareSessionWorkspace } from "@/core/session";
-import { sendChannelMessage as sendDiscordChannelMessage } from "@/ims/discord/client";
+import {
+  sendChannelMessage as sendDiscordChannelMessage,
+  sendChannelMessageForWorkspace as sendDiscordChannelMessageForWorkspace,
+} from "@/ims/discord/client";
 import { sendChannelMessage as sendLarkChannelMessage } from "@/ims/lark/client";
 import { isPermanentChannelError } from "@/shared/delivery/permanent-error";
 import { log } from "@/utils";
@@ -138,6 +141,12 @@ async function sendResultToChannel(
     return sendSlackChannelMessage(job.channelId, text);
   }
   if (job.platform === "discord") {
+    if (job.workspaceId) {
+      return sendDiscordChannelMessageForWorkspace(job.channelId, text, job.workspaceId);
+    }
+    // Legacy rows may predate workspace snapshots. Keep their existing
+    // unpinned fallback rather than guessing a workspace, but all newly
+    // created cron rows use the exact stored workspace route above.
     return sendDiscordChannelMessage(job.channelId, text);
   }
   const larkResult = await sendLarkChannelMessage(job.channelId, text);
