@@ -1,3 +1,10 @@
+import {
+  materializeThreadMessageAttachments,
+  normalizeThreadMessageLimit,
+  type ThreadMessage,
+} from "@/ims/shared/thread-messages";
+import { parseLarkAttachmentSources, parseLarkText } from "./message-content";
+
 // ---------------------------------------------------------------------------
 // Lark IM helper module.
 //
@@ -289,7 +296,8 @@ export async function getLarkThreadMessages(args: {
   channelId?: string;
   threadId: string;
   limit?: number;
-}): Promise<{ messages: Array<Record<string, unknown>> }> {
+  downloadAttachments?: boolean;
+}): Promise<{ messages: ThreadMessage[] }> {
   const appId = args.appId.trim();
   const appSecret = args.appSecret.trim();
   if (!appId || !appSecret) {
@@ -297,15 +305,93 @@ export async function getLarkThreadMessages(args: {
   }
   const threadId = requireString(args.threadId, "threadId");
   const channelId = args.channelId?.trim();
-  const limit = Math.min(Math.max(args.limit ?? 20, 1), 50);
+  const limit = normalizeThreadMessageLimit(args.limit);
   const token = await getTenantAccessToken(appId, appSecret);
 
+  const normalizeMessages = async (items: Array<Record<string, unknown>>): Promise<ThreadMessage[]> => {
+    const ordered = [...items].sort((left, right) => {
+      const leftTime = Number(left.create_time ?? 0);
+      const rightTime = Number(right.create_time ?? 0);
+      return leftTime - rightTime;
+    });
+    return Promise.all(ordered.map(async (item, index): Promise<ThreadMessage> => {
+      const id = typeof item.message_id === "string" ? item.message_id : `message-${index + 1}`;
+      const body = item.body && typeof item.body === "object"
+        ? item.body as Record<string, unknown>
+        : undefined;
+      const content = typeof body?.content === "string"
+        ? body.content
+        : typeof item.content === "string"
+          ? item.content
+          : undefined;
+      const messageType = typeof item.msg_type === "string"
+        ? item.msg_type
+        : typeof item.message_type === "string"
+          ? item.message_type
+          : "";
+      const sender = item.sender && typeof item.sender === "object"
+        ? item.sender as Record<string, unknown>
+        : undefined;
+      const sources = parseLarkAttachmentSources({
+        messageType,
+        content,
+        messageId: id,
+        token,
+      });
+      return {
+        id,
+        timestamp: typeof item.create_time === "string" ? item.create_time : undefined,
+        author: sender
+          ? {
+              id: typeof sender.id === "string" ? sender.id : undefined,
+              name: typeof sender.name === "string" ? sender.name : undefined,
+              isBot: sender.sender_type === "app",
+            }
+          : undefined,
+        text: parseLarkText(content),
+        attachments: await materializeThreadMessageAttachments({
+          platform: "lark",
+          messageId: id,
+          sources,
+          download: args.downloadAttachments === true,
+        }),
+      };
+    }));
+  };
+
   let threadConversationId = "";
+  let rootMessage: Record<string, unknown> | null = null;
   try {
-    const root = await getMessageById(token, threadId);
-    threadConversationId = typeof root?.thread_id === "string" ? root.thread_id : "";
+    rootMessage = await getMessageById(token, threadId);
+    threadConversationId = typeof rootMessage?.thread_id === "string" ? rootMessage.thread_id : "";
   } catch {
     threadConversationId = "";
+  }
+
+  const withRootAndLatest = (items: Array<Record<string, unknown>>): Array<Record<string, unknown>> => {
+    const unique = items.filter((item, index, all) => {
+      const id = typeof item.message_id === "string" ? item.message_id : "";
+      return id && all.findIndex((candidate) => candidate.message_id === id) === index;
+    });
+    const latestReplies = unique
+      .filter((item) => item.message_id !== threadId)
+      .sort((left, right) => Number(right.create_time ?? 0) - Number(left.create_time ?? 0))
+      .slice(0, Math.max(0, limit - 1));
+    return rootMessage ? [rootMessage, ...latestReplies] : latestReplies.slice(0, limit);
+  };
+
+  if (threadConversationId) {
+    const data = await larkRequest<{
+      items?: Array<Record<string, unknown>>;
+    }>(
+      "GET",
+      `/open-apis/im/v1/messages?container_id_type=thread&container_id=${encodeURIComponent(threadConversationId)}&sort_type=ByCreateTimeDesc&page_size=${limit}`,
+      token,
+    );
+    const messages = withRootAndLatest(data.items ?? []);
+    if (messages.length > 0) {
+      return { messages: await normalizeMessages(messages) };
+    }
   }
 
   if (channelId) {
@@ -313,10 +399,10 @@ export async function getLarkThreadMessages(args: {
       items?: Array<Record<string, unknown>>;
     }>(
       "GET",
-      `/open-apis/im/v1/messages?container_id_type=chat&container_id=${encodeURIComponent(channelId)}&page_size=50`,
+      `/open-apis/im/v1/messages?container_id_type=chat&container_id=${encodeURIComponent(channelId)}&sort_type=ByCreateTimeDesc&page_size=50`,
       token
     );
-    const messages = (data.items ?? [])
+    const matchingMessages = (data.items ?? [])
       .filter((item) => {
         const messageId = typeof item.message_id === "string" ? item.message_id : "";
         const rootId = typeof item.root_id === "string" ? item.root_id : "";
@@ -326,10 +412,10 @@ export async function getLarkThreadMessages(args: {
           return itemThreadId === threadConversationId;
         }
         return messageId === threadId || rootId === threadId || parentId === threadId;
-      })
-      .slice(-limit);
+      });
+    const messages = withRootAndLatest(matchingMessages);
     if (messages.length > 0) {
-      return { messages };
+      return { messages: await normalizeMessages(messages) };
     }
   }
 
@@ -344,7 +430,7 @@ export async function getLarkThreadMessages(args: {
       // ignore single message lookup failures
     }
   }
-  return { messages };
+  return { messages: await normalizeMessages(messages) };
 }
 
 /**

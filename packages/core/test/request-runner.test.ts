@@ -147,6 +147,65 @@ describe("runTrackedRequest", () => {
     expect(published).toEqual(["_Done_"]);
   });
 
+  it("does not finish the root request when a child session stops", async () => {
+    const published: string[] = [];
+    const childContext = {
+      rootSessionID: "s1",
+      sourceSessionID: "child-1",
+      childSession: true,
+      transportType: "sync",
+    };
+
+    const result = await runTrackedRequest({
+      deps: {
+        agent: {
+          supportsEventStream: true,
+          ensureSession: async () => {},
+          getProviderForSession: () => "opencode",
+          subscribeToSession: (_sessionId: string, handler: (event: any) => void) => {
+            setTimeout(() => {
+              handler({
+                type: "message.part.updated",
+                odeContext: childContext,
+                properties: {
+                  part: {
+                    type: "step-finish",
+                    reason: "stop",
+                    sessionID: "child-1",
+                  },
+                  odeContext: childContext,
+                },
+              });
+            }, 0);
+            return () => {};
+          },
+        } as any,
+        im: {
+          updateMessage: async () => {},
+        } as any,
+      },
+      request: buildRequest(),
+      workingPath: "/tmp/project",
+      liveEventHistory: new Map(),
+      liveParsedState: new Map(),
+      sendPrompt: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        return [{ text: "root finished", messageType: "assistant" }];
+      },
+      onProgressTick: async () => {},
+      onComplete: () => {},
+      onFail: () => {},
+      publishFinalText: async (text) => {
+        published.push(text);
+      },
+      failureLogLabel: "runner failed",
+      ...buildRunParams(),
+    });
+
+    expect(result.responses).toEqual([{ text: "root finished", messageType: "assistant" }]);
+    expect(published).toEqual(["root finished"]);
+  });
+
   it("does not echo the user prompt when currentText is the prompt itself", async () => {
     const request = buildRequest();
     request.prompt = "You can use accounts in infra/readme, can connect to staging db";

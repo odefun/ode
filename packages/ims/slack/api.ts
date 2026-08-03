@@ -1,4 +1,10 @@
 import { basename } from "path";
+import {
+  materializeThreadMessageAttachments,
+  normalizeThreadMessageLimit,
+  type ThreadMessage,
+} from "@/ims/shared/thread-messages";
+import type { AttachmentSource } from "@/ims/shared/attachment-store";
 import { getApp, getSlackBotToken } from "./client";
 
 // ---------------------------------------------------------------------------
@@ -156,11 +162,47 @@ export async function uploadSlackFile(args: {
 /**
  * Fetch the messages of a Slack thread. Powers `ode messages get`.
  */
+export async function collectSlackRootAndLatestMessages(params: {
+  threadId: string;
+  limit: number;
+  fetchPage: (cursor: string | undefined, pageLimit: number) => Promise<{
+    messages?: Array<Record<string, unknown>>;
+    response_metadata?: { next_cursor?: string };
+  }>;
+}): Promise<Array<Record<string, unknown>>> {
+  const latestReplies: Array<Record<string, unknown>> = [];
+  let rootMessage: Record<string, unknown> | undefined;
+  let cursor: string | undefined;
+  const seenCursors = new Set<string>();
+
+  do {
+    const data = await params.fetchPage(cursor, params.limit === 1 ? 1 : 200);
+    for (const message of data.messages ?? []) {
+      if (message.ts === params.threadId) {
+        rootMessage = message;
+        continue;
+      }
+      latestReplies.push(message);
+      if (latestReplies.length > Math.max(0, params.limit - 1)) {
+        latestReplies.shift();
+      }
+    }
+    if (params.limit === 1) break;
+    const nextCursor = data.response_metadata?.next_cursor?.trim();
+    if (!nextCursor || seenCursors.has(nextCursor)) break;
+    seenCursors.add(nextCursor);
+    cursor = nextCursor;
+  } while (cursor);
+
+  return rootMessage ? [rootMessage, ...latestReplies] : latestReplies;
+}
+
 export async function getSlackThreadMessages(args: {
   channelId: string;
   threadId: string;
   limit?: number;
-}): Promise<{ messages: unknown[] }> {
+  downloadAttachments?: boolean;
+}): Promise<{ messages: ThreadMessage[] }> {
   const channelId = requireString(args.channelId, "channelId");
   const threadId = requireString(args.threadId, "threadId");
   const token = getSlackBotToken(channelId, threadId);
@@ -168,13 +210,76 @@ export async function getSlackThreadMessages(args: {
     throw new Error("No Slack bot token available for channel");
   }
   const client = getApp().client;
-  const data = await client.conversations.replies({
-    channel: channelId,
-    ts: threadId,
-    limit: args.limit ?? 20,
-    token,
+  const limit = normalizeThreadMessageLimit(args.limit);
+  // Slack returns the earliest items first. Walk cursor pages and retain only
+  // a small ring buffer so long threads still yield their latest replies.
+  const rawMessages = await collectSlackRootAndLatestMessages({
+    threadId,
+    limit,
+    fetchPage: async (cursor, pageLimit) => {
+      const data = await client.conversations.replies({
+        channel: channelId,
+        ts: threadId,
+        limit: pageLimit,
+        cursor,
+        token,
+      });
+      return data as {
+        messages?: Array<Record<string, unknown>>;
+        response_metadata?: { next_cursor?: string };
+      };
+    },
   });
-  return { messages: (data as { messages?: unknown[] }).messages ?? [] };
+  const messages = await Promise.all(rawMessages.map(async (message, index): Promise<ThreadMessage> => {
+    const id = typeof message.ts === "string" ? message.ts : `message-${index + 1}`;
+    const files = Array.isArray(message.files) ? message.files : [];
+    const sources = files.flatMap((file): AttachmentSource[] => {
+      if (!file || typeof file !== "object") return [];
+      const record = file as Record<string, unknown>;
+      const url = typeof record.url_private_download === "string"
+        ? record.url_private_download
+        : typeof record.url_private === "string"
+          ? record.url_private
+          : "";
+      if (!url) return [];
+      return [{
+        id: typeof record.id === "string" ? record.id : undefined,
+        filename: typeof record.name === "string" ? record.name : undefined,
+        mimeType: typeof record.mimetype === "string" ? record.mimetype : undefined,
+        size: typeof record.size === "number" ? record.size : undefined,
+        url,
+        headers: { Authorization: `Bearer ${token}` },
+      }];
+    });
+    const botProfile = message.bot_profile && typeof message.bot_profile === "object"
+      ? message.bot_profile as Record<string, unknown>
+      : undefined;
+    return {
+      id,
+      timestamp: typeof message.ts === "string" ? message.ts : undefined,
+      author: {
+        id: typeof message.user === "string"
+          ? message.user
+          : typeof message.bot_id === "string"
+            ? message.bot_id
+            : undefined,
+        name: typeof message.username === "string"
+          ? message.username
+          : typeof botProfile?.name === "string"
+            ? botProfile.name
+            : undefined,
+        isBot: typeof message.bot_id === "string" || message.subtype === "bot_message",
+      },
+      text: typeof message.text === "string" ? message.text : "",
+      attachments: await materializeThreadMessageAttachments({
+        platform: "slack",
+        messageId: id,
+        sources,
+        download: args.downloadAttachments === true,
+      }),
+    };
+  }));
+  return { messages };
 }
 
 /**

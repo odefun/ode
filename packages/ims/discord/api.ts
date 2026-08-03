@@ -1,4 +1,10 @@
 import { basename } from "path";
+import type { AttachmentSource } from "@/ims/shared/attachment-store";
+import {
+  materializeThreadMessageAttachments,
+  normalizeThreadMessageLimit,
+  type ThreadMessage,
+} from "@/ims/shared/thread-messages";
 
 // ---------------------------------------------------------------------------
 // Discord IM helper module.
@@ -178,7 +184,8 @@ export async function getDiscordThreadMessages(args: {
   channelId: string;
   threadId?: string;
   limit?: number;
-}): Promise<{ messages: Array<{ id: string; content: string; author?: { username?: string } }> }> {
+  downloadAttachments?: boolean;
+}): Promise<{ messages: ThreadMessage[] }> {
   const token = args.botToken.trim();
   if (!token) {
     throw new Error("Discord bot token missing");
@@ -187,12 +194,54 @@ export async function getDiscordThreadMessages(args: {
   if (!channelOrThread) {
     throw new Error("channelId or threadId is required");
   }
-  const limit = Math.min(Math.max(args.limit ?? 20, 1), 100);
-  const messages = await discordApiCall<Array<{ id: string; content: string; author?: { username?: string } }>>(
+  const limit = normalizeThreadMessageLimit(args.limit);
+  const rawMessages = await discordApiCall<Array<Record<string, unknown>>>(
     token,
     "GET",
     `/channels/${channelOrThread}/messages?limit=${limit}`
   );
+  const messages = await Promise.all([...rawMessages].reverse().map(async (message, index): Promise<ThreadMessage> => {
+    const id = typeof message.id === "string" ? message.id : `message-${index + 1}`;
+    const rawAttachments = Array.isArray(message.attachments) ? message.attachments : [];
+    const sources = rawAttachments.flatMap((attachment): AttachmentSource[] => {
+      if (!attachment || typeof attachment !== "object") return [];
+      const record = attachment as Record<string, unknown>;
+      const url = typeof record.url === "string" ? record.url : "";
+      if (!url) return [];
+      return [{
+        id: typeof record.id === "string" ? record.id : undefined,
+        filename: typeof record.filename === "string" ? record.filename : undefined,
+        mimeType: typeof record.content_type === "string" ? record.content_type : undefined,
+        size: typeof record.size === "number" ? record.size : undefined,
+        url,
+      }];
+    });
+    const author = message.author && typeof message.author === "object"
+      ? message.author as Record<string, unknown>
+      : undefined;
+    return {
+      id,
+      timestamp: typeof message.timestamp === "string" ? message.timestamp : undefined,
+      author: author
+        ? {
+            id: typeof author.id === "string" ? author.id : undefined,
+            name: typeof author.global_name === "string"
+              ? author.global_name
+              : typeof author.username === "string"
+                ? author.username
+                : undefined,
+            isBot: author.bot === true,
+          }
+        : undefined,
+      text: typeof message.content === "string" ? message.content : "",
+      attachments: await materializeThreadMessageAttachments({
+        platform: "discord",
+        messageId: id,
+        sources,
+        download: args.downloadAttachments === true,
+      }),
+    };
+  }));
   return { messages };
 }
 

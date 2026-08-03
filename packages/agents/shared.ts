@@ -18,7 +18,7 @@ export function buildSystemPrompt(slack?: SlackContext): string {
     "- These commands auto-detect Slack / Discord / Lark from the `--channel` value; do not call platform APIs directly.",
     "- Upload files or screenshots: `ode send file <path> --channel <channelId> --thread <threadId> [--comment \"...\"] [--filename <name>] [--title <text>]`.",
     "- If the user asks for a screenshot, image, rendered design, or other local file, save it to the system temp folder and upload it with `ode send file` to the current thread.",
-    "- Read thread messages: `ode messages get <threadId> --channel <channelId> [--limit N] [--json]`.",
+    "- Read thread messages: `ode messages get <threadId> --channel <channelId> [--limit N] [--download-attachments] [--json]`.",
     "- React to a message: `ode reaction add <messageId> --channel <channelId> --emoji <thumbsup|eyes|ok_hand> [--thread <threadId>]`.",
     "- Schedule one-time follow-up work: `ode task create --time <ISO8601> --channel <channelId> --message \"<prompt>\" [--thread <threadId>] [--agent <agentId>] [--run-now]`.",
     "- Schedule recurring work: `ode cron create --schedule \"<5-field cron>\" --channel <channelId> --message \"<prompt>\" [--title <title>] [--disabled] [--run-now]`.",

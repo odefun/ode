@@ -67,7 +67,7 @@ describe("lark api helpers", () => {
     }
   });
 
-  it("fetches thread messages by filtering channel history", async () => {
+  it("fetches the thread root plus newest replies", async () => {
     const fetchMock = mock(async (url: string) => {
       if (url.includes("tenant_access_token")) {
         return new Response(
@@ -88,15 +88,16 @@ describe("lark api helpers", () => {
           { status: 200, headers: { "content-type": "application/json" } }
         );
       }
-      if (url.includes("/im/v1/messages?container_id_type=chat")) {
+      if (url.includes("container_id_type=thread")) {
+        expect(url).toContain("sort_type=ByCreateTimeDesc");
         return new Response(
           JSON.stringify({
             code: 0,
             data: {
               items: [
-                { message_id: "om_root", thread_id: "thr_1" },
-                { message_id: "om_reply", thread_id: "thr_1" },
-                { message_id: "om_other", thread_id: "thr_2" },
+                { message_id: "om_new", thread_id: "thr_1", create_time: "3" },
+                { message_id: "om_old", thread_id: "thr_1", create_time: "2" },
+                { message_id: "om_root", thread_id: "thr_1", create_time: "1" },
               ],
             },
           }),
@@ -115,9 +116,10 @@ describe("lark api helpers", () => {
       appSecret: "secret",
       channelId: "oc_123",
       threadId: "om_root",
+      limit: 2,
     });
 
-    expect(result.messages.map((m) => m.message_id)).toEqual(["om_root", "om_reply"]);
+    expect(result.messages.map((m) => m.id)).toEqual(["om_root", "om_new"]);
   });
 
   it("adds a reaction via addLarkReaction", async () => {

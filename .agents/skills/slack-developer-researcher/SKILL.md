@@ -15,3 +15,7 @@ Ask clarifying questions if you need to focus on specific endpoints, scopes, or 
 - https://docs.slack.dev/apis/
 - https://docs.slack.dev/reference/events
 - https://docs.slack.dev/ai/developing-ai-apps
+
+## Current thread pagination note
+- `conversations.replies` is cursor-paginated and returns the earliest messages first. To read the latest replies from a long thread, traverse `response_metadata.next_cursor` and retain a bounded tail.
+- Slack recommends pages of no more than 200. Marketplace and internal customer-built apps use Tier 3 limits; commercially distributed non-Marketplace apps may be restricted to 1 request/minute and 15 items per page.

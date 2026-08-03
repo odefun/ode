@@ -1,5 +1,6 @@
 import type { Elysia } from "elysia";
 import { getDiscordThreadMessages, getLarkThreadMessages, getSlackThreadMessages } from "@/ims";
+import { buildThreadMessagesResult } from "@/ims/shared/thread-messages";
 import { attachDiscordBotToken, attachLarkCredentials } from "../config-validation";
 import { jsonResponse, readJsonBody, runRoute } from "../http";
 import { resolveChannelLocator } from "./channel-resolver";
@@ -24,6 +25,10 @@ function getOptionalNumber(payload: Record<string, unknown>, key: string): numbe
   return undefined;
 }
 
+function getBoolean(payload: Record<string, unknown>, key: string): boolean {
+  return payload[key] === true;
+}
+
 export function registerMessagesRoutes(app: Elysia): void {
   /**
    * Fetch messages from a thread / channel. Powers `ode messages get`. The
@@ -41,6 +46,7 @@ export function registerMessagesRoutes(app: Elysia): void {
         }
         const threadId = getOptionalString(body, "threadId");
         const limit = getOptionalNumber(body, "limit");
+        const downloadAttachments = getBoolean(body, "downloadAttachments");
 
         const resolved = resolveChannelLocator(channelIdRaw);
 
@@ -52,8 +58,14 @@ export function registerMessagesRoutes(app: Elysia): void {
             channelId: resolved.channelId,
             threadId,
             limit,
+            downloadAttachments,
           });
-          return { platform: resolved.platform, ...result };
+          return buildThreadMessagesResult({
+            platform: resolved.platform,
+            messages: result.messages,
+            requestedLimit: limit,
+            downloadAttachments,
+          });
         }
 
         if (resolved.platform === "discord") {
@@ -68,8 +80,14 @@ export function registerMessagesRoutes(app: Elysia): void {
             channelId: resolved.channelId,
             threadId,
             limit,
+            downloadAttachments,
           });
-          return { platform: resolved.platform, ...result };
+          return buildThreadMessagesResult({
+            platform: resolved.platform,
+            messages: result.messages,
+            requestedLimit: limit,
+            downloadAttachments,
+          });
         }
 
         if (resolved.platform === "lark") {
@@ -92,8 +110,14 @@ export function registerMessagesRoutes(app: Elysia): void {
             channelId: resolved.channelId,
             threadId,
             limit,
+            downloadAttachments,
           });
-          return { platform: resolved.platform, ...result };
+          return buildThreadMessagesResult({
+            platform: resolved.platform,
+            messages: result.messages,
+            requestedLimit: limit,
+            downloadAttachments,
+          });
         }
 
         throw new Error(`Unsupported platform: ${resolved.platform}`);

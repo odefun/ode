@@ -1,4 +1,5 @@
 import { getWebHost, getWebPort } from "@/config";
+import type { ThreadMessagesResult } from "@/ims/shared/thread-messages";
 
 type CliArgs = string[];
 
@@ -75,19 +76,34 @@ function printMessagesHelp(): void {
       "ode messages - fetch messages from a chat thread/channel",
       "",
       "Usage:",
-      "  ode messages get <threadId> --channel <channelId> [--limit N] [--json]",
+      "  ode messages get <threadId> --channel <channelId> [--limit N] [--download-attachments] [--json]",
       "",
       "Notes:",
       "  <threadId> is the thread root id (Slack `thread_ts`, Lark message id, Discord channel/thread id).",
-      "  --limit caps how many replies to return (default 20).",
+      "  --limit caps messages at 50 (default 20); output is also capped at 64 KiB.",
+      "  --download-attachments saves attachments to Ode's private store and returns localPath values.",
       "  --channel accepts either a raw channel id or a \"workspaceId::channelId\" value.",
       "  Ode auto-detects the platform (Slack / Discord / Lark) from the channel.",
     ].join("\n"),
   );
 }
 
+async function writeStdout(value: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    process.stdout.write(value, (error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+}
+
 async function handleMessagesGet(args: CliArgs): Promise<void> {
-  const { flags, positional } = parseFlags(args, { channel: true, limit: true, json: false });
+  const { flags, positional } = parseFlags(args, {
+    channel: true,
+    limit: true,
+    "download-attachments": false,
+    json: false,
+  });
   const threadId = positional[0];
   if (!threadId) throw new Error("Thread id is required: ode messages get <threadId> --channel <channelId>");
   const channel = flags.channel as string | undefined;
@@ -100,19 +116,26 @@ async function handleMessagesGet(args: CliArgs): Promise<void> {
 
   const body: Record<string, unknown> = { channelId: channel, threadId };
   if (limit !== undefined) body.limit = limit;
+  if (flags["download-attachments"] === true) body.downloadAttachments = true;
 
-  const result = await apiFetch<{ platform: string; messages: unknown[] }>("/api/messages/thread", {
+  const result = await apiFetch<ThreadMessagesResult>("/api/messages/thread", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
   if (flags.json) {
-    console.log(JSON.stringify(result, null, 2));
+    // Await the stdout write so `cli.ts` cannot call process.exit before a
+    // large JSON payload has drained from the pipe.
+    await writeStdout(`${JSON.stringify(result, null, 2)}\n`);
     return;
   }
-  console.log(`platform: ${result.platform}  count: ${result.messages.length}`);
-  console.log("--- messages ---");
-  console.log(JSON.stringify(result.messages, null, 2));
+  await writeStdout([
+    `platform: ${result.platform}  count: ${result.messages.length}`,
+    `limits: ${result.meta.appliedLimit} messages / ${result.meta.maxBytes} bytes  truncated: ${result.meta.truncated}`,
+    "--- messages ---",
+    JSON.stringify(result.messages, null, 2),
+    "",
+  ].join("\n"));
 }
 
 export async function handleMessagesCommand(args: CliArgs): Promise<number> {

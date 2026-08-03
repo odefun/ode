@@ -84,7 +84,8 @@ ODE is a project that connects many AI coding agents with IM message apps. When 
 - Visual testing workflows should save screenshots to `os.tmpdir()` and upload them directly into the current thread.
 
 ## Fetching Messages (`ode messages`)
-- `ode messages get <threadId> --channel <channelId> [--limit N] [--json]` returns the replies in a thread.
+- `ode messages get <threadId> --channel <channelId> [--limit N] [--download-attachments] [--json]` returns a bounded root + latest-replies view of a thread (default 20 messages, maximum 50, maximum 64 KiB serialized output).
+- `--download-attachments` stores files in Ode's private attachment store and adds stable `localPath` descriptors; without it, the command returns attachment metadata only and never exposes expiring/private IM URLs.
 - Use it to re-read the current thread, pick up a follow-up comment posted while tools were running, or inspect another thread by root id.
 
 ## Reactions (`ode reaction`)

@@ -73,6 +73,32 @@ function isPromptEcho(candidate: string | undefined, prompt: string | undefined)
   return c === p;
 }
 
+/**
+ * A provider may stream events from child/sub-agent sessions through the
+ * root-session subscription. Their `step-finish(reason=stop)` marks only the
+ * child as complete and must not end the parent Ode request.
+ */
+function isRootSessionStopEvent(event: Record<string, unknown> | undefined): boolean {
+  if (!event || event.type !== "message.part.updated") return false;
+  const properties = event.properties && typeof event.properties === "object"
+    ? event.properties as Record<string, unknown>
+    : undefined;
+  const part = properties?.part && typeof properties.part === "object"
+    ? properties.part as Record<string, unknown>
+    : undefined;
+  if (part?.type !== "step-finish" || part.reason !== "stop") return false;
+
+  const contextValue = event.odeContext ?? properties?.odeContext;
+  const context = contextValue && typeof contextValue === "object"
+    ? contextValue as Record<string, unknown>
+    : undefined;
+  if (context?.childSession === true) return false;
+
+  const sourceSessionId = extractEventSessionId(event);
+  const rootSessionId = extractEventRootSessionId(event);
+  return !(sourceSessionId && rootSessionId && sourceSessionId !== rootSessionId);
+}
+
 export function mirrorPendingQuestionToRealThread(params: {
   channelId: string;
   syntheticThreadId: string;
@@ -462,12 +488,9 @@ async function startKernelEventStreamWatcher(params: {
       directory: (globalEvent as any)?.directory,
     });
 
-    if (!stopNotified && event?.type === "message.part.updated") {
-      const part = (event as any)?.properties?.part;
-      if (part?.type === "step-finish" && part?.reason === "stop") {
-        stopNotified = true;
-        shouldNotifyStop = true;
-      }
+    if (!stopNotified && isRootSessionStopEvent(event as Record<string, unknown> | undefined)) {
+      stopNotified = true;
+      shouldNotifyStop = true;
     }
 
     // Decide up-front which string fields inside this event must be kept
