@@ -17,3 +17,23 @@ export function isSyntheticOwner(userId: string | null | undefined): boolean {
   if (!userId) return false;
   return SYNTHETIC_OWNER_PREFIXES.some((prefix) => userId.startsWith(prefix));
 }
+
+/**
+ * Build the `thread_ts` field for a Slack API payload, omitting it entirely
+ * when `threadId` is a synthetic placeholder.
+ *
+ * The task/cron schedulers address a run by a synthetic thread id
+ * (`task:{id}` / `cron-job:{id}:{run}`) before Slack has assigned a real
+ * `thread_ts`. Slack rejects those strings with `invalid_thread_ts` because
+ * they are not message timestamps, so the message is dropped and reported as
+ * a delivery failure. Omitting the field degrades to a top-level channel
+ * post, which keeps the message visible.
+ *
+ * Spread the result into the payload: `{ channel, ...threadTsField(id) }`.
+ */
+export function threadTsField(
+  threadId: string | null | undefined
+): { thread_ts?: string } {
+  if (!threadId || isSyntheticOwner(threadId)) return {};
+  return { thread_ts: threadId };
+}
