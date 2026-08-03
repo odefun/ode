@@ -33,7 +33,12 @@ import {
 } from "@/config/local/sessions";
 import { matchesCronExpression } from "@/core/cron/expression";
 import { buildMessageOptions } from "@/core/runtime/message-options";
-import { buildFinalResponseText, categorizeRuntimeError } from "@/core/runtime/helpers";
+import { buildFinalResponseText } from "@/core/runtime/helpers";
+import {
+  categorizeScheduledRunError,
+  startScheduledAgentRunObserver,
+  type ScheduledAgentRunObserver,
+} from "@/core/runtime/scheduled-agent-run";
 import { sendSlackChannelMessage } from "@/core/runtime/slack-senders";
 import { buildSessionEnvironment, prepareSessionWorkspace } from "@/core/session";
 import {
@@ -84,17 +89,34 @@ class CronStepTimeoutError extends Error {
   }
 }
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, step: string): Promise<T> {
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  step: string,
+  onTimeout?: () => Promise<void> | void,
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
+    let settled = false;
     const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      if (onTimeout) {
+        void Promise.resolve(onTimeout()).catch((error) => {
+          log.warn("Cron timeout abort failed", { step, error: String(error) });
+        });
+      }
       reject(new CronStepTimeoutError(step, timeoutMs));
     }, timeoutMs);
     promise.then(
       (value) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timer);
         resolve(value);
       },
       (error) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timer);
         reject(error);
       }
@@ -350,6 +372,10 @@ async function runCronJob(job: CronJobRecord, minuteStartMs: number): Promise<vo
   const cronMessageId = getCronMessageId(minuteStartMs);
   const threadKey = buildThreadKey(job.channelId, cronThreadId);
   let agentResultDetailId: string | null = null;
+  let observer: ScheduledAgentRunObserver | null = null;
+  let activeSessionId: string | null = null;
+  let activeWorkingDirectory: string | null = null;
+  let abortPromise: Promise<void> | null = null;
 
   try {
     const { session, sessionId, cwd } = await withTimeout(
@@ -357,6 +383,8 @@ async function runCronJob(job: CronJobRecord, minuteStartMs: number): Promise<vo
       CRON_PREPARE_TIMEOUT_MS,
       "Cron session preparation"
     );
+    activeSessionId = sessionId;
+    activeWorkingDirectory = cwd;
     const providerId = agent.getProviderForSession(sessionId);
     const options = buildMessageOptions({
       text: job.messageText,
@@ -414,17 +442,78 @@ async function runCronJob(job: CronJobRecord, minuteStartMs: number): Promise<vo
       });
     }
 
+    observer = await startScheduledAgentRunObserver({
+      agent,
+      sessionId,
+      providerId,
+      runId,
+      threadKey,
+      syntheticThreadId: cronThreadId,
+      channelId: job.channelId,
+      workingDirectory: cwd,
+      model,
+      agentResultDetailId,
+      requestMessageId: cronMessageId,
+      sendQuestion: async (text) => {
+        const realThreadId = await sendResultToChannel(
+          job,
+          `*Cron job needs input:* ${job.title}\n${text}`,
+        );
+        if (!realThreadId) {
+          throw new Error(`No message id returned while asking cron question for ${job.title}`);
+        }
+        return { messageId: realThreadId, realThreadId };
+      },
+      seedRealThread: ({ realThreadId }) => {
+        seedCronChannelThreadSession({
+          platform: job.platform,
+          channelId: job.channelId,
+          realThreadId,
+          sessionId,
+          providerId,
+          workingDirectory: cwd,
+          syntheticOwnerId: getCronUserId(job.id),
+          branchName: session.branchName,
+        });
+        ensureMessageThread({
+          platform: job.platform,
+          channelId: job.channelId,
+          threadId: realThreadId,
+          replyThreadId: realThreadId,
+          sessionId,
+          providerId,
+          model,
+          workingDirectory: cwd,
+          threadOwnerUserId: getCronUserId(job.id),
+          branchName: session.branchName,
+          sourceKind: "cron_job",
+          cronJobId: job.id,
+          cronJobTitle: job.title,
+          context: {
+            sourceKind: "cron_job",
+            cronJobId: job.id,
+            cronJobTitle: job.title,
+            syntheticThreadId: cronThreadId,
+          },
+        });
+      },
+    });
+
     const responses = await withTimeout(
-      agent.sendMessage(
+      observer.watch(agent.sendMessage(
         job.channelId,
         sessionId,
         createAgentInput(job.messageText),
         cwd,
         options,
         buildCronAgentContext(job, runId)
-      ),
+      )),
       CRON_AGENT_TIMEOUT_MS,
-      "Cron agent turn"
+      "Cron agent turn",
+      () => {
+        abortPromise ??= agent.abortSession(sessionId, cwd);
+        return abortPromise;
+      },
     );
     const finalText = buildFinalResponseText(responses) ?? "_Done_";
 
@@ -439,6 +528,7 @@ async function runCronJob(job: CronJobRecord, minuteStartMs: number): Promise<vo
       // failures fall through to the generic error handler below and the
       // job stays enabled for the next tick.
       if (isPermanentChannelError(sendError)) {
+        await observer.finish("failed", String(sendError));
         await disableCronJobForPermanentChannelError(job, sendError, agentResultDetailId);
         return;
       }
@@ -472,9 +562,19 @@ async function runCronJob(job: CronJobRecord, minuteStartMs: number): Promise<vo
         });
       }
     }
+    await observer.finish("completed");
     markCronJobCompleted(job.id);
   } catch (error) {
-    const { message } = categorizeRuntimeError(error);
+    if (activeSessionId && activeWorkingDirectory) {
+      // The timeout callback starts the abort immediately. Await that same
+      // request here so we do not mark the cron run failed while its provider
+      // session is still running. Observer/delivery failures use this as the
+      // final abort safety net too.
+      abortPromise ??= agent.abortSession(activeSessionId, activeWorkingDirectory);
+      await abortPromise;
+    }
+    const { message } = categorizeScheduledRunError(error, observer?.snapshot());
+    await observer?.finish("failed", message);
     if (agentResultDetailId) {
       try {
         failAgentResult({

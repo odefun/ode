@@ -31,14 +31,25 @@ import {
   type PersistedSession,
 } from "@/config/local/sessions";
 import { buildMessageOptions } from "@/core/runtime/message-options";
-import { buildFinalResponseText, categorizeRuntimeError } from "@/core/runtime/helpers";
+import { buildFinalResponseText } from "@/core/runtime/helpers";
+import {
+  categorizeScheduledRunError,
+  startScheduledAgentRunObserver,
+  type ScheduledAgentRunObserver,
+} from "@/core/runtime/scheduled-agent-run";
 import {
   sendSlackChannelMessage,
   sendSlackThreadMessage,
 } from "@/core/runtime/slack-senders";
 import { buildSessionEnvironment, prepareSessionWorkspace } from "@/core/session";
-import { sendChannelMessage as sendDiscordChannelMessage } from "@/ims/discord/client";
-import { sendChannelMessage as sendLarkChannelMessage } from "@/ims/lark/client";
+import {
+  sendChannelMessage as sendDiscordChannelMessage,
+  sendThreadMessage as sendDiscordThreadMessage,
+} from "@/ims/discord/client";
+import {
+  sendChannelMessage as sendLarkChannelMessage,
+  sendThreadMessage as sendLarkThreadMessage,
+} from "@/ims/lark/client";
 import { type AgentProviderId, isAgentProviderId } from "@/shared/agent-provider";
 import { log } from "@/utils";
 import { createAgentInput } from "@/shared/agent-protocol";
@@ -98,17 +109,34 @@ class TaskStepTimeoutError extends Error {
   }
 }
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, step: string): Promise<T> {
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  step: string,
+  onTimeout?: () => Promise<void> | void,
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
+    let settled = false;
     const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      if (onTimeout) {
+        void Promise.resolve(onTimeout()).catch((error) => {
+          log.warn("Task timeout abort failed", { step, error: String(error) });
+        });
+      }
       reject(new TaskStepTimeoutError(step, timeoutMs));
     }, timeoutMs);
     promise.then(
       (value) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timer);
         resolve(value);
       },
       (error) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timer);
         reject(error);
       },
@@ -349,6 +377,10 @@ async function runTask(task: TaskRecord): Promise<void> {
   const taskMessageId = getTaskMessageId(task);
   let agentResultDetailId: string | null = null;
   let threadKey: string | null = null;
+  let observer: ScheduledAgentRunObserver | null = null;
+  let activeSessionId: string | null = null;
+  let activeWorkingDirectory: string | null = null;
+  let abortPromise: Promise<void> | null = null;
 
   try {
     const { session, sessionId, cwd, threadId } = await withTimeout(
@@ -356,6 +388,8 @@ async function runTask(task: TaskRecord): Promise<void> {
       TASK_PREPARE_TIMEOUT_MS,
       "Task session preparation",
     );
+    activeSessionId = sessionId;
+    activeWorkingDirectory = cwd;
     threadKey = buildThreadKey(task.channelId, threadId);
     const providerId = agent.getProviderForSession(sessionId);
     const options = buildMessageOptions({
@@ -416,17 +450,92 @@ async function runTask(task: TaskRecord): Promise<void> {
       });
     }
 
+    observer = await startScheduledAgentRunObserver({
+      agent,
+      sessionId,
+      providerId,
+      runId: getTaskMessageId(task),
+      threadKey,
+      syntheticThreadId: threadId,
+      channelId: task.channelId,
+      workingDirectory: cwd,
+      model,
+      agentResultDetailId,
+      requestMessageId: getTaskMessageId(task),
+      sendQuestion: async (text) => {
+        const prompt = `*Task needs input:* ${task.title}\n${text}`;
+        if (task.threadId && task.threadId.trim().length > 0) {
+          let messageId: string | undefined;
+          if (task.platform === "slack") {
+            messageId = await sendSlackThreadMessage(task.channelId, task.threadId, prompt);
+          } else if (task.platform === "discord") {
+            messageId = await sendDiscordThreadMessage(task.channelId, task.threadId, prompt);
+          } else {
+            messageId = await sendLarkThreadMessage(task.channelId, task.threadId, prompt);
+          }
+          if (!messageId) {
+            throw new Error(`No message id returned while asking task question for ${task.title}`);
+          }
+          return { messageId, realThreadId: task.threadId };
+        }
+
+        const outcome = await sendResultToChannel(task, prompt);
+        if (!outcome.newThreadId) {
+          throw new Error(`No thread id returned while asking task question for ${task.title}`);
+        }
+        return { messageId: outcome.newThreadId, realThreadId: outcome.newThreadId };
+      },
+      seedRealThread: ({ realThreadId }) => {
+        seedChannelThreadSession({
+          platform: task.platform,
+          channelId: task.channelId,
+          realThreadId,
+          sessionId,
+          providerId,
+          workingDirectory: cwd,
+          syntheticOwnerId: getTaskUserId(task.id),
+          botParticipantId: "task",
+          branchName: session.branchName,
+        });
+        ensureMessageThread({
+          platform: task.platform,
+          channelId: task.channelId,
+          threadId: realThreadId,
+          replyThreadId: realThreadId,
+          sessionId,
+          providerId,
+          model,
+          workingDirectory: cwd,
+          threadOwnerUserId: session.threadOwnerUserId ?? getTaskUserId(task.id),
+          branchName: session.branchName,
+          sourceKind: "task",
+          taskId: task.id,
+          taskTitle: task.title,
+          context: {
+            sourceKind: "task",
+            taskId: task.id,
+            taskTitle: task.title,
+            syntheticThreadId: threadId,
+          },
+        });
+      },
+    });
+
     const responses = await withTimeout(
-      agent.sendMessage(
+      observer.watch(agent.sendMessage(
         task.channelId,
         sessionId,
         createAgentInput(task.messageText),
         cwd,
         options,
         buildTaskAgentContext(task),
-      ),
+      )),
       TASK_AGENT_TIMEOUT_MS,
       "Task agent turn",
+      () => {
+        abortPromise ??= agent.abortSession(sessionId, cwd);
+        return abortPromise;
+      },
     );
     const finalText = buildFinalResponseText(responses) ?? "_Done_";
 
@@ -464,9 +573,15 @@ async function runTask(task: TaskRecord): Promise<void> {
         });
       }
     }
+    await observer.finish("completed");
     markTaskCompleted(task.id);
   } catch (error) {
-    const { message } = categorizeRuntimeError(error);
+    if (activeSessionId && activeWorkingDirectory) {
+      abortPromise ??= agent.abortSession(activeSessionId, activeWorkingDirectory);
+      await abortPromise;
+    }
+    const { message } = categorizeScheduledRunError(error, observer?.snapshot());
+    await observer?.finish("failed", message);
     if (agentResultDetailId) {
       try {
         failAgentResult({

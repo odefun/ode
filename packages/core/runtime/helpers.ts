@@ -33,6 +33,13 @@ export function categorizeRuntimeError(
     };
   }
 
+  if (err instanceof Error && err.name === "OpenCodeInteractionTimeoutError") {
+    return {
+      message: err.message,
+      suggestion: "The pending question or permission was not answered in time. Retry the run and answer it from the IM thread.",
+    };
+  }
+
   // Check upstream / session errors BEFORE the generic "timeout" rule below,
   // because 524 payloads also contain the word "timeout".
 

@@ -9,6 +9,7 @@ import {
 } from "./server";
 import {
   DEFAULT_OPENCODE_IDLE_TIMEOUT_MS,
+  DEFAULT_OPENCODE_INTERACTION_TIMEOUT_MS,
   monitorOpenCodePrompt,
 } from "./prompt-monitor";
 import { pathToFileURL } from "node:url";
@@ -36,6 +37,14 @@ function getOpenCodeIdleTimeoutMs(): number | null {
   if (!raw) return DEFAULT_OPENCODE_IDLE_TIMEOUT_MS;
   const parsed = Number(raw);
   if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_OPENCODE_IDLE_TIMEOUT_MS;
+  return parsed === 0 ? null : Math.floor(parsed);
+}
+
+function getOpenCodeInteractionTimeoutMs(): number | null {
+  const raw = process.env.ODE_OPENCODE_INTERACTION_TIMEOUT_MS?.trim();
+  if (!raw) return DEFAULT_OPENCODE_INTERACTION_TIMEOUT_MS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_OPENCODE_INTERACTION_TIMEOUT_MS;
   return parsed === 0 ? null : Math.floor(parsed);
 }
 
@@ -310,11 +319,13 @@ export async function sendMessage(
         signal: promptAbortController.signal,
       });
       const idleTimeoutMs = getOpenCodeIdleTimeoutMs();
-      const result = idleTimeoutMs === null
+      const interactionTimeoutMs = getOpenCodeInteractionTimeoutMs();
+      const result = idleTimeoutMs === null && interactionTimeoutMs === null
         ? await promptPromise
         : await monitorOpenCodePrompt({
             prompt: promptPromise,
             timeoutMs: idleTimeoutMs,
+            interactionTimeoutMs,
             readHealth: async () => {
               const snapshot = getSessionRuntimeSnapshot(activeSessionId);
               if (!snapshot) return null;
@@ -325,6 +336,7 @@ export async function sendMessage(
                   relatedSessionIds: snapshot.relatedSessionIds,
                   lastMeaningfulEventAt: snapshot.lastMeaningfulEventAt,
                   awaitingInteraction: snapshot.awaitingInteraction,
+                  pendingInteractions: snapshot.pendingInteractions,
                   statuses: statusResult.data as Record<string, unknown>,
                 };
               } catch (error) {
@@ -662,10 +674,25 @@ export function statusFromEvent(event: ProgressEvent, sessionId: string): string
 export async function abortSession(sessionId: string, directory?: string): Promise<void> {
   try {
     const client = await getSessionClient(sessionId);
-    await client.session.abort({
-      sessionID: sessionId,
-      directory,
-    });
+    const snapshot = getSessionRuntimeSnapshot(sessionId);
+    const sessionIds = snapshot?.relatedSessionIds ?? [sessionId];
+    const results = await Promise.allSettled(sessionIds.map((relatedSessionId) =>
+      client.session.abort({
+        sessionID: relatedSessionId,
+        directory,
+      })
+    ));
+    const failed = results.filter((result) =>
+      result.status === "rejected"
+      || Boolean(result.value?.error)
+    );
+    if (failed.length > 0) {
+      log.warn("Some related OpenCode sessions failed to abort", {
+        sessionId,
+        relatedSessionIds: sessionIds,
+        failedCount: failed.length,
+      });
+    }
   } catch (err) {
     log.warn("Failed to abort session", { sessionId, error: String(err) });
   }

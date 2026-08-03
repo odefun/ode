@@ -427,6 +427,15 @@ async function sendMessage(
   });
 }
 
+export async function sendThreadMessage(
+  channelId: string,
+  threadId: string,
+  text: string,
+  processorId?: string,
+): Promise<string | undefined> {
+  return sendMessage(channelId, threadId, text, processorId);
+}
+
 export async function sendChannelMessage(
   channelId: string,
   text: string,

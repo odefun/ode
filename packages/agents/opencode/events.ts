@@ -24,6 +24,13 @@ export type OpenCodeChildSession = {
 
 export type OpenCodePermissionReply = "once" | "always" | "reject";
 
+export function isOpenCodeExternalDirectoryPermission(event: unknown): boolean {
+  const record = asRecord(event);
+  if (record?.type !== "permission.asked") return false;
+  const properties = asRecord(record.properties);
+  return asNonEmptyString(properties?.permission)?.toLowerCase() === "external_directory";
+}
+
 function asRecord(value: unknown): UnknownRecord | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as UnknownRecord
@@ -83,6 +90,10 @@ export function normalizeOpenCodePermissionQuestion(event: unknown): UnknownReco
         multiple: false,
         custom: false,
       }],
+      odePermission: {
+        permission,
+        patterns,
+      },
       odeContext: properties.odeContext,
     },
     odeContext: record.odeContext,

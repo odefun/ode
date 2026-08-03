@@ -23,6 +23,7 @@ import {
   recordAgentQuestion,
   completeAgentQuestion,
   recordOdeRunEvents,
+  updateAgentResultContext,
 } from "@/config/local/inbox";
 import { getMessageUpdateIntervalMs, getUserGeneralSettings } from "@/config";
 import { buildFinalResponseText, categorizeRuntimeError, createDeferred } from "@/core/runtime/helpers";
@@ -228,6 +229,7 @@ async function startKernelEventStreamWatcher(params: {
   threadKey: string | null;
   model: string | null;
   runId: string;
+  agentResultDetailId: string | null;
   onUpdate: () => void;
   onStop?: () => void;
 }): Promise<() => void> {
@@ -240,6 +242,7 @@ async function startKernelEventStreamWatcher(params: {
     threadKey,
     model,
     runId,
+    agentResultDetailId,
     onUpdate,
     onStop,
   } = params;
@@ -368,6 +371,50 @@ async function startKernelEventStreamWatcher(params: {
       content: todo.content,
       status: todo.status as TrackedTodo["status"],
     }));
+
+    if (agentResultDetailId) {
+      const lastEvent = eventHistory[eventHistory.length - 1];
+      const lastTool = parsedState.tools[parsedState.tools.length - 1];
+      const pendingQuestion = getPendingQuestion(request.channelId, request.threadId);
+      try {
+        updateAgentResultContext({
+          detailId: agentResultDetailId,
+          context: {
+            runtimeDiagnostics: {
+              sessionId: request.sessionId,
+              runId,
+              lastEventAt: lastEvent?.timestamp ?? request.startedAt,
+              lastEventType: lastEvent?.type ?? "run.started",
+              lastTool: lastTool
+                ? {
+                    id: lastTool.id,
+                    name: lastTool.name,
+                    status: lastTool.status,
+                    title: lastTool.title,
+                    input: lastTool.input,
+                  }
+                : null,
+              pendingInteractions: pendingQuestion
+                ? [{
+                    requestId: pendingQuestion.requestId,
+                    sessionId: pendingQuestion.sessionId,
+                    kind: pendingQuestion.kind ?? "question",
+                    askedAt: pendingQuestion.askedAt,
+                    permission: pendingQuestion.permission,
+                    patterns: pendingQuestion.patterns,
+                    question: pendingQuestion.questions[0]?.question,
+                  }]
+                : [],
+            },
+          },
+        });
+      } catch (error) {
+        log.warn("Failed to persist request runtime diagnostics", {
+          detailId: agentResultDetailId,
+          error: String(error),
+        });
+      }
+    }
   }
 
   let stopNotified = false;
@@ -560,6 +607,10 @@ async function startKernelEventStreamWatcher(params: {
         id?: string;
         sessionID?: string;
         questions?: unknown;
+        odePermission?: {
+          permission?: unknown;
+          patterns?: unknown;
+        };
       };
       const requestId = properties?.id;
       if (!requestId) return;
@@ -623,6 +674,15 @@ async function startKernelEventStreamWatcher(params: {
           requestId,
           sessionId: properties.sessionID ?? request.sessionId,
           askedAt: Date.now(),
+          kind: properties.odePermission ? "permission" : "question",
+          permission: typeof properties.odePermission?.permission === "string"
+            ? properties.odePermission.permission
+            : undefined,
+          patterns: Array.isArray(properties.odePermission?.patterns)
+            ? properties.odePermission.patterns.filter(
+                (value): value is string => typeof value === "string",
+              )
+            : undefined,
           questions: normalized,
           messageTs: questionMessageTs ?? request.statusMessageTs,
           collectedAnswers: [],
@@ -635,6 +695,34 @@ async function startKernelEventStreamWatcher(params: {
           realThreadId: questionMessageTs,
           pendingQuestion,
         });
+        if (agentResultDetailId) {
+          try {
+            updateAgentResultContext({
+              detailId: agentResultDetailId,
+              context: {
+                runtimeDiagnostics: {
+                  lastEventAt: Date.now(),
+                  lastEventType: "question.asked",
+                  pendingInteractions: [{
+                    requestId: pendingQuestion.requestId,
+                    sessionId: pendingQuestion.sessionId,
+                    kind: pendingQuestion.kind ?? "question",
+                    askedAt: pendingQuestion.askedAt,
+                    permission: pendingQuestion.permission,
+                    patterns: pendingQuestion.patterns,
+                    question: pendingQuestion.questions[0]?.question,
+                  }],
+                },
+              },
+            });
+          } catch (error) {
+            log.warn("Failed to persist pending request interaction", {
+              detailId: agentResultDetailId,
+              requestId,
+              error: String(error),
+            });
+          }
+        }
       })();
       return;
     }
@@ -955,6 +1043,7 @@ export async function runTrackedRequest(
       threadKey,
       model,
       runId,
+      agentResultDetailId,
       onUpdate: () => {},
       onStop: () => {
         stopSignal.resolve();

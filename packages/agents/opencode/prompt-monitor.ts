@@ -1,5 +1,15 @@
 export const DEFAULT_OPENCODE_IDLE_TIMEOUT_MS = 60_000;
 export const DEFAULT_OPENCODE_HEALTH_POLL_MS = 5_000;
+export const DEFAULT_OPENCODE_INTERACTION_TIMEOUT_MS = 30 * 60_000;
+
+export type OpenCodePendingInteractionHealth = {
+  requestId: string;
+  sessionId: string;
+  kind: "question" | "permission";
+  askedAt: number;
+  permission?: string;
+  patterns?: string[];
+};
 
 export class OpenCodeIdlePromptError extends Error {
   constructor(timeoutMs: number) {
@@ -10,10 +20,29 @@ export class OpenCodeIdlePromptError extends Error {
   }
 }
 
+export class OpenCodeInteractionTimeoutError extends Error {
+  readonly interaction: OpenCodePendingInteractionHealth;
+
+  constructor(timeoutMs: number, interaction: OpenCodePendingInteractionHealth) {
+    const target = interaction.permission
+      ? `permission ${interaction.permission}`
+      : interaction.kind;
+    const patterns = interaction.patterns?.length
+      ? ` for ${interaction.patterns.join(", ")}`
+      : "";
+    super(
+      `OpenCode waited ${Math.round(timeoutMs / 60_000)} minutes for ${target}${patterns}`
+    );
+    this.name = "OpenCodeInteractionTimeoutError";
+    this.interaction = interaction;
+  }
+}
+
 export type OpenCodePromptHealth = {
   relatedSessionIds: readonly string[];
   lastMeaningfulEventAt: number;
   awaitingInteraction: boolean;
+  pendingInteractions?: readonly OpenCodePendingInteractionHealth[];
   statuses: Record<string, unknown>;
 };
 
@@ -35,14 +64,30 @@ export function isOpenCodePromptIdleTimedOut(params: {
   return !health.relatedSessionIds.some((sessionId) => statusIsActive(health.statuses[sessionId]));
 }
 
+export function getTimedOutOpenCodeInteraction(params: {
+  health: OpenCodePromptHealth;
+  now: number;
+  timeoutMs: number;
+}): OpenCodePendingInteractionHealth | null {
+  const { health, now, timeoutMs } = params;
+  const pending = health.pendingInteractions ?? [];
+  return pending.find((interaction) => now - interaction.askedAt >= timeoutMs) ?? null;
+}
+
 export async function monitorOpenCodePrompt<T>(params: {
   prompt: Promise<T>;
   readHealth: () => Promise<OpenCodePromptHealth | null>;
   abort: () => Promise<void>;
-  timeoutMs?: number;
+  timeoutMs?: number | null;
+  interactionTimeoutMs?: number | null;
   pollIntervalMs?: number;
 }): Promise<T> {
-  const timeoutMs = params.timeoutMs ?? DEFAULT_OPENCODE_IDLE_TIMEOUT_MS;
+  const timeoutMs = params.timeoutMs === undefined
+    ? DEFAULT_OPENCODE_IDLE_TIMEOUT_MS
+    : params.timeoutMs;
+  const interactionTimeoutMs = params.interactionTimeoutMs === undefined
+    ? DEFAULT_OPENCODE_INTERACTION_TIMEOUT_MS
+    : params.interactionTimeoutMs;
   const pollIntervalMs = params.pollIntervalMs ?? DEFAULT_OPENCODE_HEALTH_POLL_MS;
   let settled = false;
 
@@ -55,9 +100,25 @@ export async function monitorOpenCodePrompt<T>(params: {
       if (settled) break;
       const health = await params.readHealth();
       if (!health) continue;
-      if (!isOpenCodePromptIdleTimedOut({ health, now: Date.now(), timeoutMs })) continue;
-      await params.abort();
-      throw new OpenCodeIdlePromptError(timeoutMs);
+      const now = Date.now();
+      if (interactionTimeoutMs !== null) {
+        const interaction = getTimedOutOpenCodeInteraction({
+          health,
+          now,
+          timeoutMs: interactionTimeoutMs,
+        });
+        if (interaction) {
+          await params.abort();
+          throw new OpenCodeInteractionTimeoutError(interactionTimeoutMs, interaction);
+        }
+      }
+      if (
+        timeoutMs !== null
+        && isOpenCodePromptIdleTimedOut({ health, now, timeoutMs })
+      ) {
+        await params.abort();
+        throw new OpenCodeIdlePromptError(timeoutMs);
+      }
     }
     return await new Promise<never>(() => {});
   })();

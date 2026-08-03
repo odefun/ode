@@ -3,6 +3,7 @@ import {
   extractOpenCodeChildSession,
   getOpenCodeEventContext,
   getOpenCodeEventFingerprint,
+  isOpenCodeExternalDirectoryPermission,
   normalizeOpenCodeGlobalEvent,
   normalizeOpenCodePermissionQuestion,
   parseOpenCodePermissionReply,
@@ -128,5 +129,19 @@ describe("OpenCode global event normalization", () => {
     expect(parseOpenCodePermissionReply([["Allow once"]])).toBe("once");
     expect(parseOpenCodePermissionReply([["Always allow"]])).toBe("always");
     expect(parseOpenCodePermissionReply([["unexpected free-form reply"]])).toBe("reject");
+  });
+
+  it("identifies external_directory as the globally auto-approved permission", () => {
+    expect(isOpenCodeExternalDirectoryPermission({
+      type: "permission.asked",
+      properties: {
+        permission: "external_directory",
+        patterns: ["/tmp/*"],
+      },
+    })).toBe(true);
+    expect(isOpenCodeExternalDirectoryPermission({
+      type: "permission.asked",
+      properties: { permission: "bash" },
+    })).toBe(false);
   });
 });

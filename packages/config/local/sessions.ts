@@ -55,6 +55,9 @@ export interface PendingQuestion {
   requestId: string;
   sessionId: string;
   askedAt: number;
+  kind?: "question" | "permission";
+  permission?: string;
+  patterns?: string[];
   questions: Array<{
     question: string;
     options?: string[];

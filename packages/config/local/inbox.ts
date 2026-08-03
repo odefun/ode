@@ -172,6 +172,11 @@ export interface FailAgentResultParams {
   workingDirectory?: string | null;
 }
 
+export interface UpdateAgentResultContextParams {
+  detailId: string;
+  context: Record<string, unknown>;
+}
+
 export interface RecordAgentQuestionParams {
   threadKey: string;
   requestMessageId: string;
@@ -877,6 +882,43 @@ export function failAgentResult(params: FailAgentResultParams): void {
     | { thread_id: string }
     | null;
   if (row) bumpThreadActivity(db, row.thread_id, endTime);
+}
+
+export function updateAgentResultContext(params: UpdateAgentResultContextParams): void {
+  const db = getDatabase();
+  const row = db.query(
+    "SELECT context_json FROM message_detail WHERE id = ? AND kind = 'agent_result'"
+  ).get(params.detailId) as { context_json: string | null } | null;
+  if (!row) return;
+  const existing = safeJsonParse<Record<string, unknown>>(row.context_json) ?? {};
+  const existingRuntimeDiagnostics = existing.runtimeDiagnostics
+    && typeof existing.runtimeDiagnostics === "object"
+    && !Array.isArray(existing.runtimeDiagnostics)
+    ? existing.runtimeDiagnostics as Record<string, unknown>
+    : undefined;
+  const patchRuntimeDiagnostics = params.context.runtimeDiagnostics
+    && typeof params.context.runtimeDiagnostics === "object"
+    && !Array.isArray(params.context.runtimeDiagnostics)
+    ? params.context.runtimeDiagnostics as Record<string, unknown>
+    : undefined;
+  const next = {
+    ...existing,
+    ...params.context,
+    ...(patchRuntimeDiagnostics
+      ? {
+          runtimeDiagnostics: {
+            ...existingRuntimeDiagnostics,
+            ...patchRuntimeDiagnostics,
+          },
+        }
+      : {}),
+  };
+  const now = Date.now();
+  db.query(
+    `UPDATE message_detail
+     SET context_json = ?, updated_at = ?
+     WHERE id = ? AND kind = 'agent_result'`
+  ).run(toJsonText(next), now, params.detailId);
 }
 
 export function recordAgentQuestion(params: RecordAgentQuestionParams): MessageDetail {

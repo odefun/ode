@@ -9,6 +9,7 @@ import { getOpenCodeModels, setOpenCodeModels } from "@/config";
 import {
   extractOpenCodeChildSession,
   getOpenCodeEventFingerprint,
+  isOpenCodeExternalDirectoryPermission,
   isMeaningfulOpenCodeEvent,
   normalizeOpenCodeGlobalEvent,
   normalizeOpenCodePermissionQuestion,
@@ -27,7 +28,7 @@ interface SessionInstance {
   rootSessionId: string;
   validSessionIds: Set<string>; // Sessions created in this instance
   childTitles: Map<string, string>;
-  awaitingInteractionSessionIds: Set<string>;
+  pendingInteractions: Map<string, OpenCodePendingInteractionSnapshot>;
   seenEventFingerprints: BoundedSet<string>;
   env: SessionEnvironment;
   baseUrl: string;
@@ -38,6 +39,16 @@ export type OpenCodeSessionRuntimeSnapshot = {
   relatedSessionIds: string[];
   lastMeaningfulEventAt: number;
   awaitingInteraction: boolean;
+  pendingInteractions: OpenCodePendingInteractionSnapshot[];
+};
+
+export type OpenCodePendingInteractionSnapshot = {
+  requestId: string;
+  sessionId: string;
+  kind: "question" | "permission";
+  askedAt: number;
+  permission?: string;
+  patterns?: string[];
 };
 
 class OpenCodeServerRuntimeState {
@@ -270,7 +281,7 @@ function ensureCleanupInterval(): void {
     const now = Date.now();
     for (const [sessionId, session] of runtimeState.sessionInstances) {
       if (
-        session.awaitingInteractionSessionIds.size === 0
+        session.pendingInteractions.size === 0
         && now - session.lastActive > INACTIVE_TIMEOUT_MS
       ) {
         log.debug("Cleaning up inactive session", { sessionId });
@@ -319,7 +330,7 @@ async function getOrCreateSessionInstance(
         rootSessionId: sessionId,
         validSessionIds: new Set(),
         childTitles: new Map(),
-        awaitingInteractionSessionIds: new Set(),
+        pendingInteractions: new Map(),
         seenEventFingerprints: new BoundedSet(5_000),
         env,
         baseUrl,
@@ -408,18 +419,38 @@ function startSessionEventLoop(sessionId: string, session: SessionInstance): voi
         }
 
         const interactionSessionId = eventSessionId ?? session.rootSessionId;
+        const interactionProperties = event.properties as Record<string, unknown> | undefined;
+        const interactionRequestId = typeof interactionProperties?.requestID === "string"
+          ? interactionProperties.requestID
+          : typeof interactionProperties?.id === "string"
+            ? interactionProperties.id
+            : undefined;
         if (event.type === "question.asked") {
-          session.awaitingInteractionSessionIds.add(interactionSessionId);
+          if (interactionRequestId) {
+            session.pendingInteractions.set(interactionRequestId, {
+              requestId: interactionRequestId,
+              sessionId: interactionSessionId,
+              kind: "question",
+              askedAt: Date.now(),
+            });
+          }
         } else if (
           event.type === "question.replied"
           || event.type === "question.rejected"
           || event.type === "permission.replied"
         ) {
-          session.awaitingInteractionSessionIds.delete(interactionSessionId);
+          if (interactionRequestId) {
+            session.pendingInteractions.delete(interactionRequestId);
+          } else {
+            for (const [requestId, pending] of session.pendingInteractions) {
+              if (pending.sessionId === interactionSessionId) {
+                session.pendingInteractions.delete(requestId);
+              }
+            }
+          }
           if (event.type === "permission.replied") {
-            const properties = event.properties as { requestID?: unknown } | undefined;
-            if (typeof properties?.requestID === "string") {
-              pendingOpenCodePermissions.delete(properties.requestID);
+            if (interactionRequestId) {
+              pendingOpenCodePermissions.delete(interactionRequestId);
             }
           }
         }
@@ -430,14 +461,79 @@ function startSessionEventLoop(sessionId: string, session: SessionInstance): voi
           const requestId = permEvent.properties?.id;
           const permissionQuestion = normalizeOpenCodePermissionQuestion(event);
           if (requestId && permissionQuestion) {
-            pendingOpenCodePermissions.set(requestId, {
-              session,
-              subscriptionSessionId: sessionId,
-              interactionSessionId,
-              directory,
-            });
-            session.awaitingInteractionSessionIds.add(interactionSessionId);
-            eventsToDispatch.push({ directory, payload: permissionQuestion });
+            const permission = typeof permEvent.properties?.permission === "string"
+              ? permEvent.properties.permission
+              : undefined;
+            const patterns = Array.isArray(permEvent.properties?.patterns)
+              ? permEvent.properties.patterns.filter((value): value is string => typeof value === "string")
+              : undefined;
+
+            if (isOpenCodeExternalDirectoryPermission(event)) {
+              try {
+                const response = await session.client.permission.reply({
+                  requestID: requestId,
+                  reply: "always",
+                  directory,
+                });
+                if (response.error) {
+                  throw new Error(String(response.error));
+                }
+                session.pendingInteractions.delete(requestId);
+                eventsToDispatch[0] = {
+                  directory,
+                  payload: {
+                    ...event,
+                    properties: {
+                      ...(event.properties as Record<string, unknown> | undefined),
+                      odeAutoApproved: true,
+                    },
+                  },
+                };
+                log.info("Auto-approved OpenCode external_directory permission", {
+                  sessionId: interactionSessionId,
+                  requestId,
+                  patterns,
+                });
+              } catch (error) {
+                log.warn("Failed to auto-approve OpenCode external_directory permission", {
+                  sessionId: interactionSessionId,
+                  requestId,
+                  patterns,
+                  error: String(error),
+                });
+                pendingOpenCodePermissions.set(requestId, {
+                  session,
+                  subscriptionSessionId: sessionId,
+                  interactionSessionId,
+                  directory,
+                });
+                session.pendingInteractions.set(requestId, {
+                  requestId,
+                  sessionId: interactionSessionId,
+                  kind: "permission",
+                  askedAt: Date.now(),
+                  permission,
+                  patterns,
+                });
+                eventsToDispatch.push({ directory, payload: permissionQuestion });
+              }
+            } else {
+              pendingOpenCodePermissions.set(requestId, {
+                session,
+                subscriptionSessionId: sessionId,
+                interactionSessionId,
+                directory,
+              });
+              session.pendingInteractions.set(requestId, {
+                requestId,
+                sessionId: interactionSessionId,
+                kind: "permission",
+                askedAt: Date.now(),
+                permission,
+                patterns,
+              });
+              eventsToDispatch.push({ directory, payload: permissionQuestion });
+            }
           }
         }
 
@@ -487,7 +583,7 @@ export async function createSessionInstance(envOverrides?: SessionEnvironment): 
         rootSessionId: sessionId,
         validSessionIds: new Set([sessionId]), // This session is valid in this instance
         childTitles: new Map(),
-        awaitingInteractionSessionIds: new Set(),
+        pendingInteractions: new Map(),
         seenEventFingerprints: new BoundedSet(5_000),
         env: normalizedEnv,
         baseUrl: normalizedBaseUrl,
@@ -531,7 +627,7 @@ export async function replyToOpenCodePermission(params: {
     throw new Error(`OpenCode permission reply error: ${response.error}`);
   }
   pendingOpenCodePermissions.delete(params.requestId);
-  pending.session.awaitingInteractionSessionIds.delete(pending.interactionSessionId);
+  pending.session.pendingInteractions.delete(params.requestId);
   return true;
 }
 
@@ -553,7 +649,8 @@ export function getSessionRuntimeSnapshot(
     rootSessionId: session.rootSessionId,
     relatedSessionIds: [...session.validSessionIds],
     lastMeaningfulEventAt: session.lastMeaningfulEventAt,
-    awaitingInteraction: session.awaitingInteractionSessionIds.size > 0,
+    awaitingInteraction: session.pendingInteractions.size > 0,
+    pendingInteractions: [...session.pendingInteractions.values()],
   };
 }
 
