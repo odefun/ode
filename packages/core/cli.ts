@@ -6,7 +6,13 @@ import packageJson from "../../package.json" with { type: "json" };
 import { getWebHost, getWebPort } from "@/config";
 import { runDaemon } from "@/core/daemon/manager";
 import { getDaemonLogPath } from "@/core/daemon/paths";
-import { isProcessAlive, readDaemonState, type DaemonState } from "@/core/daemon/state";
+import {
+  isProcessAlive,
+  isRuntimeReadyAfter,
+  readDaemonState,
+  type DaemonState,
+  type RuntimeReadyMarker,
+} from "@/core/daemon/state";
 import { runOnboarding } from "@/core/onboarding";
 import { handleTaskCommand } from "@/core/cli-handlers/task";
 import { handleCronCommand } from "@/core/cli-handlers/cron";
@@ -151,11 +157,14 @@ function ensureDaemonRunning(): void {
   child.unref();
 }
 
-async function waitForReadyMessage(timeoutMs: number): Promise<string | null> {
+async function waitForReadyMessage(timeoutMs: number, after?: RuntimeReadyMarker): Promise<string | null> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     const state = daemonState();
-    if (state.status === "ready" && typeof state.readyMessage === "string" && state.readyMessage.length > 0 && managerRunning(state)) {
+    const ready = after
+      ? isRuntimeReadyAfter(state, after)
+      : state.status === "ready" && typeof state.readyMessage === "string" && state.readyMessage.length > 0;
+    if (ready && managerRunning(state)) {
       return state.readyMessage;
     }
     if (!managerRunning(state)) {
@@ -416,7 +425,10 @@ async function restartDaemonCommand(): Promise<void> {
     console.log("Runtime is not currently running; waiting for daemon to restart.");
   }
 
-  const ready = await waitForReadyMessage(READY_WAIT_MS);
+  const ready = await waitForReadyMessage(READY_WAIT_MS, {
+    runtimePid: state.runtimePid,
+    lastReadyAt: state.lastReadyAt,
+  });
   console.log(ready ?? `Restart requested. Follow logs at ${getDaemonLogPath()}`);
 }
 

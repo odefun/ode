@@ -25,6 +25,21 @@ export interface DaemonState {
   updatedAt: number;
 }
 
+export type RuntimeReadyMarker = Pick<DaemonState, "runtimePid" | "lastReadyAt">;
+
+export function isRuntimeReadyAfter(state: DaemonState, marker: RuntimeReadyMarker): boolean {
+  if (state.status !== "ready" || !state.readyMessage || !state.runtimePid || !state.lastReadyAt) {
+    return false;
+  }
+  if (marker.runtimePid !== null && state.runtimePid === marker.runtimePid) {
+    return false;
+  }
+  if (marker.lastReadyAt !== null && state.lastReadyAt <= marker.lastReadyAt) {
+    return false;
+  }
+  return true;
+}
+
 function createDefaultState(): DaemonState {
   const now = Date.now();
   return {
