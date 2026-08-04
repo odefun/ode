@@ -29,7 +29,7 @@ import { createProcessorManager } from "@/ims/shared/processor-manager";
 import { SlackAuthRegistry, type WorkspaceAuth } from "@/ims/slack/state/auth-registry";
 import { SlackMessageUpdateManager } from "@/ims/slack/message-update-manager";
 import { deliveryStats, isRateLimitError } from "@/ims/shared/delivery-stats";
-import { isSyntheticOwner } from "@/ims/shared/synthetic-owner";
+import { isSyntheticOwner, threadTsField } from "@/ims/shared/synthetic-owner";
 
 export interface MessageContext {
   channelId: string;
@@ -309,7 +309,28 @@ export async function sendMessage(
   const formattedText = markdownToSlack(text);
   const chunks = splitForSlack(formattedText);
   const workspace = slackAuthRegistry.getChannelWorkspaceName(rawChannelId) || "unknown";
-  const botToken = getSlackBotTokenForProcessor(processorId) ?? getSlackBotToken(channelId, threadId);
+
+  // A "synthetic" thread id (`task:{id}` / `cron-job:{id}:{run}` / `cron:{id}`)
+  // is an internal placeholder the task/cron schedulers use before a real
+  // Slack `thread_ts` exists. Slack rejects these with `invalid_thread_ts`
+  // because they are not message timestamps, so any intermediate output the
+  // agent runtime emits during a scheduled run is lost and captured as a
+  // Sentry delivery failure (ODE-DEAMON-7). Degenerate to a top-level channel
+  // post instead so the message still lands in the channel.
+  const threadIsSynthetic = isSyntheticOwner(threadId);
+
+  // Token resolution. For real threads prefer the registry-bound token for
+  // this (channel, thread) — that's the token the inbound router observed
+  // delivering the parent message. For synthetic placeholders the call has
+  // degenerated to a top-level post and the registry has no entry for a fake
+  // `thread_ts`, so resolve via the channel's workspace first (mirroring
+  // `sendChannelMessage`) to avoid the multi-workspace case where
+  // `getSlackBotToken` returns the first registered token instead of the one
+  // for `rawChannelId`.
+  const botToken = getSlackBotTokenForProcessor(processorId)
+    ?? (threadIsSynthetic
+      ? (getWorkspaceBotTokenForChannel(channelId) ?? getSlackBotToken(channelId))
+      : getSlackBotToken(channelId, threadId));
 
   if (!botToken) {
     log.warn("No Slack bot token available for channel", { channelId });
@@ -320,6 +341,7 @@ export async function sendMessage(
       workspace,
       channel: channelId,
       thread: threadId,
+      threadIsSynthetic,
       botTokenLast6: tokenLast6(botToken),
       text,
       chunks: chunks.length,
@@ -329,6 +351,7 @@ export async function sendMessage(
       workspace,
       channel: channelId,
       thread: threadId,
+      threadIsSynthetic,
       botTokenLast6: tokenLast6(botToken),
       text,
       chunks: chunks.length,
@@ -346,7 +369,7 @@ export async function sendMessage(
     try {
       const result = await slackApp.client.chat.postMessage({
         channel: rawChannelId,
-        thread_ts: threadId,
+        ...(threadTsField(threadId)),
         text: chunk,
         token: botToken,
       });
@@ -358,7 +381,12 @@ export async function sendMessage(
       });
       lastTs = result.ts;
       if (botToken && result.ts) {
-        slackAuthRegistry.setThreadBotToken(rawChannelId, threadId, botToken);
+        // Never bind a real bot token to a synthetic placeholder thread id —
+        // the real platform-assigned thread is `result.ts` for the first
+        // message of the run, which `setMessageBotToken` covers below.
+        if (!threadIsSynthetic) {
+          slackAuthRegistry.setThreadBotToken(rawChannelId, threadId, botToken);
+        }
         slackAuthRegistry.setMessageBotToken(rawChannelId, result.ts, botToken);
       }
     } catch (err) {

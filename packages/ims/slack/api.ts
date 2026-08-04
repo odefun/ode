@@ -5,6 +5,7 @@ import {
   type ThreadMessage,
 } from "@/ims/shared/thread-messages";
 import type { AttachmentSource } from "@/ims/shared/attachment-store";
+import { threadTsField } from "@/ims/shared/synthetic-owner";
 import { getApp, getSlackBotToken } from "./client";
 
 // ---------------------------------------------------------------------------
@@ -123,7 +124,11 @@ async function slackFileUpload(
   return slackApiCall("files.completeUploadExternal", {
     files: [{ id: uploadInfo.file_id, title: args.title || args.filename }],
     channel_id: args.channelId,
-    thread_ts: args.threadId,
+    // Synthetic placeholder thread ids (`task:` / `cron-job:` / `cron:`) are
+    // not valid Slack timestamps. `ode send file` invoked from a scheduled
+    // task/cron run before a real thread exists would otherwise fail with
+    // `invalid_thread_ts`; upload to the channel top level instead.
+    ...(threadTsField(args.threadId)),
     initial_comment: args.initialComment,
   }, args.token);
 }
