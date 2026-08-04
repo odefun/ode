@@ -18,12 +18,15 @@ import {
   type AgentProvider,
   type AgentsConfig,
   type UpdateConfig,
+  type ComputerGatewayConfig,
+  type ChannelComputerUseConfig,
   type OdeConfig,
 } from "./ode-schema";
 import {
   loadOdeConfig,
   updateOdeConfig,
 } from "./ode-store";
+import { getChannelDetails } from "./ode-channel";
 import { AGENT_PROVIDERS } from "@/shared/agent-provider";
 
 export type {
@@ -32,6 +35,8 @@ export type {
   AgentProvider,
   AgentsConfig,
   UpdateConfig,
+  ComputerGatewayConfig,
+  ChannelComputerUseConfig,
   OdeConfig,
   UserConfig,
 } from "./ode-schema";
@@ -75,6 +80,7 @@ function toDashboardConfig(config: OdeConfig): DashboardConfig {
       autoUpgrade: config.updates.autoUpgrade,
     },
     agents: structuredClone(config.agents),
+    computerGateway: structuredClone(config.computerGateway),
     workspaces: structuredClone(config.workspaces),
   };
 }
@@ -96,6 +102,14 @@ function mergeDashboardConfig(config: OdeConfig, dashboardConfig: DashboardConfi
       ...channel,
       agentProvider: channel.agentProvider ?? "opencode",
       channelSystemMessage: channel.channelSystemMessage ?? "",
+      computerUse: channel.computerUse ?? {
+        browser: "off",
+        desktop: "off",
+        browserProfile: "",
+        allowedOrigins: ["http://localhost:*", "http://127.0.0.1:*"],
+        allowedApps: [],
+        approvalPolicy: "consequential",
+      },
     })),
   }));
 
@@ -112,8 +126,51 @@ function mergeDashboardConfig(config: OdeConfig, dashboardConfig: DashboardConfi
       autoUpgrade: dashboardConfig.updates.autoUpgrade !== false,
     },
     agents: structuredClone(dashboardConfig.agents),
+    computerGateway: structuredClone(dashboardConfig.computerGateway),
     workspaces,
   };
+}
+
+export function getComputerGatewayConfig(): ComputerGatewayConfig {
+  return structuredClone(loadOdeConfig().computerGateway);
+}
+
+export function getChannelComputerUse(channelId: string): ChannelComputerUseConfig {
+  return structuredClone(getChannelDetails(channelId)?.computerUse ?? {
+    browser: "off",
+    desktop: "off",
+    browserProfile: "",
+    allowedOrigins: ["http://localhost:*", "http://127.0.0.1:*"],
+    allowedApps: [],
+    approvalPolicy: "consequential",
+  });
+}
+
+export function setComputerGatewayConfig(
+  updater: (config: ComputerGatewayConfig) => ComputerGatewayConfig
+): ComputerGatewayConfig {
+  const next = updateOdeConfig((config) => ({
+    ...config,
+    computerGateway: updater(structuredClone(config.computerGateway)),
+  }));
+  return structuredClone(next.computerGateway);
+}
+
+export function setChannelComputerUse(
+  channelId: string,
+  computerUse: ChannelComputerUseConfig
+): void {
+  const resolved = getChannelDetails(channelId);
+  if (!resolved) throw new Error("Channel not found in ~/.config/ode/ode.json");
+  updateOdeConfig((config) => ({
+    ...config,
+    workspaces: config.workspaces.map((workspace) => ({
+      ...workspace,
+      channelDetails: workspace.channelDetails.map((channel) =>
+        channel.id === resolved.id ? { ...channel, computerUse } : channel
+      ),
+    })),
+  }));
 }
 
 export function readDashboardConfig(): DashboardConfig {

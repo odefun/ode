@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { log } from "@/utils";
+import { computerGateway, COMPUTER_GATEWAY_ENV, getComputerDynamicToolSpecs } from "@/computer";
 
 type JsonRpcId = number | string;
 type JsonRecord = Record<string, any>;
@@ -120,12 +121,14 @@ export class CodexAppServerConnection {
   private closed = false;
   private activeTurn: { threadId: string; turnId: string } | null = null;
   private readonly connectionId = randomUUID();
+  private readonly computerContextId?: string;
 
   constructor(
     private readonly cwd: string,
     env: Record<string, string>,
     private readonly onNotification: (notification: JsonRecord) => void
   ) {
+    this.computerContextId = env[COMPUTER_GATEWAY_ENV.contextId];
     this.child = spawn("codex", ["app-server", "--stdio"], {
       cwd,
       env: { ...process.env, ...env, PWD: cwd },
@@ -170,6 +173,7 @@ export class CodexAppServerConnection {
       sandbox: params.planMode ? "read-only" : "danger-full-access",
       developerInstructions: params.systemPrompt || null,
       experimentalRawEvents: false,
+      ...(this.computerContextId ? { dynamicTools: getComputerDynamicToolSpecs() } : {}),
     }).catch((error) => {
       throw new CodexAppServerUnavailableError(`Codex thread/start failed: ${String(error)}`);
     });
@@ -195,6 +199,7 @@ export class CodexAppServerConnection {
       sandbox: params.planMode ? "read-only" : "danger-full-access",
       developerInstructions: params.systemPrompt || null,
       excludeTurns: true,
+      ...(this.computerContextId ? { dynamicTools: getComputerDynamicToolSpecs() } : {}),
     }).catch((error) => {
       throw new CodexAppServerUnavailableError(`Codex thread/resume failed: ${String(error)}`);
     });
@@ -288,7 +293,7 @@ export class CodexAppServerConnection {
     }
 
     if (message.method && message.id !== undefined) {
-      this.handleServerRequest(message);
+      void this.handleServerRequest(message);
       return;
     }
 
@@ -312,7 +317,7 @@ export class CodexAppServerConnection {
     }
   }
 
-  private handleServerRequest(message: JsonRecord): void {
+  private async handleServerRequest(message: JsonRecord): Promise<void> {
     const method = String(message.method);
     if (method === "item/tool/requestUserInput") {
       const requestId = `codex-app:${this.connectionId}:${message.id}`;
@@ -322,6 +327,39 @@ export class CodexAppServerConnection {
         method: "ode/question/requested",
         params: { requestId, ...message.params },
       });
+      return;
+    }
+    if (method === "item/tool/call" && this.computerContextId) {
+      const toolName = typeof message.params?.tool === "string" ? message.params.tool : "";
+      try {
+        const result = await computerGateway.invoke(
+          this.computerContextId,
+          toolName,
+          message.params?.arguments ?? {},
+        );
+        const contentItems: JsonRecord[] = [{
+          type: "inputText",
+          text: JSON.stringify(result.data ?? { ok: result.ok, error: result.error }, null, 2),
+        }];
+        for (const artifact of result.artifacts ?? []) {
+          const file = Bun.file(artifact.path);
+          if (!(await file.exists())) continue;
+          const base64 = Buffer.from(await file.arrayBuffer()).toString("base64");
+          contentItems.push({
+            type: "inputImage",
+            imageUrl: `data:${artifact.mimeType};base64,${base64}`,
+          });
+        }
+        this.respond(message.id, { success: result.ok, contentItems });
+      } catch (error) {
+        this.respond(message.id, {
+          success: false,
+          contentItems: [{
+            type: "inputText",
+            text: error instanceof Error ? error.message : String(error),
+          }],
+        });
+      }
       return;
     }
     const fallback = getCodexServerRequestFallback(method);

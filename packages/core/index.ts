@@ -31,6 +31,7 @@ import { runOnboardingIfNeeded } from "./onboarding";
 import { startCronJobScheduler, stopCronJobScheduler } from "@/core/cron/scheduler";
 import { startTaskScheduler, stopTaskScheduler } from "@/core/tasks/scheduler";
 import { initSentry, shutdownSentry } from "@/core/observability/sentry";
+import { computerGateway } from "@/computer";
 import packageJson from "../../package.json" with { type: "json" };
 
 const CONFIG_WATCH_INTERVAL_MS = 1000;
@@ -347,6 +348,7 @@ async function main(): Promise<void> {
       }
       stopAutoUpgradeScheduler();
       await stopAllServers();
+      await computerGateway.stop();
       try {
         const dumpPath = deliveryStats.dumpToFileSync();
         log.info("Delivery stats snapshot written", { dumpPath });

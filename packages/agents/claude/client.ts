@@ -19,6 +19,8 @@ import {
   type SDKUserMessage,
   type Settings,
 } from "@anthropic-ai/claude-agent-sdk";
+import { createClaudeComputerMcpServer } from "@/computer/bindings/claude-sdk";
+import { COMPUTER_GATEWAY_ENV } from "@/computer";
 import type {
   AgentInput,
   OpenCodeMessage,
@@ -240,6 +242,15 @@ export function buildClaudeCommand(
   }
   const command = formatClaudeCommand(["claude", ...args]);
   return { args, command };
+}
+
+export function resolveClaudeCodeExecutable(
+  env: Record<string, string | undefined> = process.env
+): string | undefined {
+  const configured = env.ODE_CLAUDE_CODE_EXECUTABLE?.trim()
+    || env.CLAUDE_CODE_EXECUTABLE?.trim();
+  if (configured) return configured;
+  return Bun.which("claude", { PATH: env.PATH }) ?? undefined;
 }
 
 function resolveClaudePermissionMode(agent?: string): string | undefined {
@@ -819,6 +830,7 @@ export const CLAUDE_SDK_PERMISSION_TOOLS = [
   "Bash", "Glob", "Grep", "Read", "Edit", "Write", "WebFetch", "Task",
   "TodoWrite", "NotebookEdit", "TaskOutput", "TaskStop", "ToolSearch", "Skill",
   "AskUserQuestion",
+  "mcp__ode-computer__*",
 ];
 
 // Keep the SDK's auto-allow layer empty. Every tool is routed through
@@ -900,6 +912,9 @@ async function handleSdkAskUserQuestion(
 
 export function createClaudeSdkCanUseTool(sessionId: string): CanUseTool {
   return async (toolName, toolInput, control): Promise<PermissionResult> => {
+    if (toolName.startsWith("mcp__ode-computer__")) {
+      return { behavior: "allow", updatedInput: toolInput };
+    }
     if (toolName !== "AskUserQuestion" && CLAUDE_SDK_PERMISSION_TOOLS.includes(toolName)) {
       return { behavior: "allow", updatedInput: toolInput };
     }
@@ -953,13 +968,19 @@ async function sendMessageViaSdk(
       const parts = buildPromptParts(channelId, input, { ...options, agent }, context);
       const userMessage = await buildClaudeSdkUserMessage(sessionId, parts);
       const isNewSession = newSessions.has(sessionId);
-      const env = { ...process.env, ...runtime.getSessionEnvironment(sessionId), PWD: workingPath };
+      const env: Record<string, string | undefined> = {
+        ...process.env,
+        ...runtime.getSessionEnvironment(sessionId),
+        PWD: workingPath,
+      };
+      const computerContextId = env[COMPUTER_GATEWAY_ENV.contextId];
       const systemPrompt = buildSystemPrompt(context?.slack);
       const sdkQuery = queryClaude({
         prompt: singleClaudeMessage(userMessage),
         options: {
           cwd: workingPath,
           env,
+          pathToClaudeCodeExecutable: resolveClaudeCodeExecutable(env),
           ...(isNewSession ? { sessionId } : { resume: sessionId }),
           includePartialMessages: true,
           includeHookEvents: true,
@@ -977,6 +998,9 @@ async function sendMessageViaSdk(
           permissionMode: planMode ? "plan" : "default",
           effort: options?.reasoningEffort,
           canUseTool: createClaudeSdkCanUseTool(sessionId),
+          ...(computerContextId ? {
+            mcpServers: { "ode-computer": createClaudeComputerMcpServer(computerContextId) },
+          } : {}),
         },
       });
       activeSdkQueries.set(sessionId, sdkQuery);
@@ -1088,6 +1112,10 @@ function cancelPendingQuestion(sessionId: string, reason?: string): void {
 }
 
 export const ensureSession = runtime.ensureSession.bind(runtime);
+
+export function publishSessionEvent(sessionId: string, event: unknown): void {
+  runtime.publishSessionEvent(sessionId, event);
+}
 
 export const subscribeToSession = runtime.subscribeToSession.bind(runtime);
 

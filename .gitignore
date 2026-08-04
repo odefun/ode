@@ -6,6 +6,7 @@ web/.env
 packages/web-ui/node_modules/
 packages/web-ui/.svelte-kit/
 packages/web-ui/build/
+packages/computer/helper/.build/
 packages/web-ui/.env
 packages/core/web/embedded-assets.ts
 dist/

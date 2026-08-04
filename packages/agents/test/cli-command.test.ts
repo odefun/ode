@@ -1,7 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import { buildPromptParts, buildPromptText, buildSystemPrompt, buildSystemWrappedPrompt } from "../shared";
 import { buildOpenCodeCommand } from "../opencode/client";
-import { buildClaudeCommand, buildClaudeCommandArgs } from "../claude/client";
+import {
+  buildClaudeCommand,
+  buildClaudeCommandArgs,
+  resolveClaudeCodeExecutable,
+} from "../claude/client";
 import { buildCodexCommand, buildCodexCommandArgs } from "../codex/client";
 import { buildKimiCommand, buildKimiCommandArgs } from "../kimi/client";
 import { buildKiloCommand, buildKiloCommandArgs } from "../kilo/client";
@@ -14,6 +18,13 @@ import { buildCrushCommand, buildCrushCommandArgs, parseCrushResponse } from "..
 import { createAgentInput } from "@/shared/agent-protocol";
 
 describe("agent cli command formatting", () => {
+  it("uses an explicitly configured Claude Code executable", () => {
+    expect(resolveClaudeCodeExecutable({
+      ODE_CLAUDE_CODE_EXECUTABLE: " /opt/ode-test/claude ",
+      PATH: "",
+    })).toBe("/opt/ode-test/claude");
+  });
+
   it("builds the final Claude CLI command", () => {
     const message = "hello world";
     const parts = buildPromptParts("C123", createAgentInput(message));

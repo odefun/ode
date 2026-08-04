@@ -11,6 +11,7 @@ export {
   ensureValidSession,
   stopAllSessions,
   subscribeToSession,
+  publishSessionEvent,
   type EventHandler,
   type OpenCodeSessionRuntimeSnapshot,
 } from "./server";

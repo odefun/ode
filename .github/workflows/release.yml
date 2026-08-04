@@ -79,24 +79,74 @@ jobs:
       - name: Build CLI
         run: bun build packages/core/cli.ts --compile --target ${{ matrix.target }} --outfile dist/${{ matrix.artifact }}
 
-      - name: Ad-hoc sign macOS binary
+      - name: Import macOS Developer ID certificate
         if: runner.os == 'macOS'
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${MACOS_CERTIFICATE_P12}" ]]; then
+            echo "MACOS_CERTIFICATE_P12 is required for a stable Ode TCC identity" >&2
+            exit 1
+          fi
+          keychain="$RUNNER_TEMP/ode-signing.keychain-db"
+          certificate="$RUNNER_TEMP/ode-signing.p12"
+          echo "$MACOS_CERTIFICATE_P12" | base64 --decode > "$certificate"
+          security create-keychain -p ode-ci "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p ode-ci "$keychain"
+          security import "$certificate" -P "$MACOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+          security list-keychains -d user -s "$keychain"
+          security set-key-partition-list -S apple-tool:,apple: -s -k ode-ci "$keychain"
+
+      - name: Build, sign, notarize, and package Ode.app
+        if: runner.os == 'macOS'
+        env:
+          ODE_CODESIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
+          APPLE_NOTARIZATION_ID: ${{ secrets.APPLE_NOTARIZATION_ID }}
+          APPLE_NOTARIZATION_PASSWORD: ${{ secrets.APPLE_NOTARIZATION_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
           bin="dist/${{ matrix.artifact }}"
-          # Bun --compile may emit a malformed LC_CODE_SIGNATURE that AMFI rejects
-          # and that codesign refuses to overwrite in place. Strip it first, then
-          # re-sign ad-hoc so macOS will actually execute the binary.
-          codesign --remove-signature "$bin" || true
-          codesign --sign - --force --timestamp=none "$bin"
-          codesign --verify --verbose=2 "$bin"
-          codesign -dv "$bin"
+          if [[ -z "${ODE_CODESIGN_IDENTITY}" ]]; then
+            echo "MACOS_CODESIGN_IDENTITY is required" >&2
+            exit 1
+          fi
+          if [[ -z "${APPLE_NOTARIZATION_ID}" || -z "${APPLE_NOTARIZATION_PASSWORD}" || -z "${APPLE_TEAM_ID}" ]]; then
+            echo "APPLE_NOTARIZATION_ID, APPLE_NOTARIZATION_PASSWORD, and APPLE_TEAM_ID are required" >&2
+            exit 1
+          fi
+          app_output="$RUNNER_TEMP/ode-app"
+          ODE_CLI_BINARY="$bin" \
+            ODE_APP_ARCH="$(uname -m)" \
+            ODE_CODESIGN_IDENTITY="$ODE_CODESIGN_IDENTITY" \
+            ODE_BUILD_NUMBER="${GITHUB_RUN_NUMBER}" \
+            ./scripts/build-ode-app.sh "$app_output"
+          codesign --verify --deep --strict --verbose=2 "$app_output/Ode.app"
+
+          notarization_archive="$RUNNER_TEMP/ode-notarization.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$app_output/Ode.app" "$notarization_archive"
+          xcrun notarytool submit "$notarization_archive" \
+            --apple-id "$APPLE_NOTARIZATION_ID" \
+            --password "$APPLE_NOTARIZATION_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait \
+            --timeout 30m
+          xcrun stapler staple "$app_output/Ode.app"
+          xcrun stapler validate "$app_output/Ode.app"
+          spctl --assess --type execute --verbose=4 "$app_output/Ode.app"
+
+          ditto -c -k --sequesterRsrc --keepParent "$app_output/Ode.app" "dist/${{ matrix.artifact }}.zip"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
-          path: dist/${{ matrix.artifact }}
+          path: |
+            dist/${{ matrix.artifact }}
+            dist/${{ matrix.artifact }}.zip
 
   release:
     runs-on: ubuntu-latest

@@ -30,6 +30,16 @@ export type DashboardConfig = {
   updates: {
     autoUpgrade: boolean;
   };
+  computerGateway: {
+    enabled: boolean;
+    browserDriver: "agent-browser";
+    desktopDriver: "ode";
+    browserExecutable: string;
+    desktopExecutable: string;
+    browserHeaded: boolean;
+    commandTimeoutMs: number;
+    approvalTimeoutMs: number;
+  };
   agents: {
     opencode: {
       enabled: boolean;
@@ -95,6 +105,14 @@ export type DashboardConfig = {
       workingDirectory: string;
       baseBranch: string;
       channelSystemMessage?: string;
+      computerUse?: {
+        browser: "off" | "observe" | "interact";
+        desktop: "off" | "observe" | "control";
+        browserProfile: string;
+        allowedOrigins: string[];
+        allowedApps: string[];
+        approvalPolicy: "consequential" | "always" | "never";
+      };
     }[];
   }[];
 };
@@ -122,6 +140,16 @@ export const defaultDashboardConfig: DashboardConfig = {
   },
   updates: {
     autoUpgrade: true,
+  },
+  computerGateway: {
+    enabled: false,
+    browserDriver: "agent-browser",
+    desktopDriver: "ode",
+    browserExecutable: "agent-browser",
+    desktopExecutable: "ode",
+    browserHeaded: false,
+    commandTimeoutMs: 30_000,
+    approvalTimeoutMs: 10 * 60_000,
   },
   agents: createDefaultAgentsConfig(),
   workspaces: [],
@@ -214,6 +242,9 @@ const sanitizeChannelDetail = (
 ): DashboardConfig["workspaces"][number]["channelDetails"][number] | null => {
   if (!channel || typeof channel !== "object") return null;
   const detail = channel as Record<string, unknown>;
+  const computerUse = detail.computerUse && typeof detail.computerUse === "object"
+    ? detail.computerUse as Record<string, unknown>
+    : {};
   return {
     id: asString(detail.id),
     name: asString(detail.name),
@@ -222,6 +253,20 @@ const sanitizeChannelDetail = (
     workingDirectory: asString(detail.workingDirectory),
     baseBranch: asBaseBranch(detail.baseBranch),
     channelSystemMessage: asString(detail.channelSystemMessage),
+    computerUse: {
+      browser: computerUse.browser === "interact" ? "interact" : computerUse.browser === "observe" ? "observe" : "off",
+      desktop: computerUse.desktop === "control" ? "control" : computerUse.desktop === "observe" ? "observe" : "off",
+      browserProfile: asString(computerUse.browserProfile),
+      allowedOrigins: Array.isArray(computerUse.allowedOrigins)
+        ? asStringArray(computerUse.allowedOrigins)
+        : ["http://localhost:*", "http://127.0.0.1:*"],
+      allowedApps: asStringArray(computerUse.allowedApps),
+      approvalPolicy: computerUse.approvalPolicy === "always"
+        ? "always"
+        : computerUse.approvalPolicy === "never"
+          ? "never"
+          : "consequential",
+    },
   };
 };
 
@@ -289,6 +334,9 @@ export const sanitizeDashboardConfig = (config: unknown): DashboardConfig => {
   const user = record.user && typeof record.user === "object" ? (record.user as Record<string, unknown>) : {};
 
   const workspaces = sanitizeWorkspaces(record.workspaces);
+  const computerGateway = record.computerGateway && typeof record.computerGateway === "object"
+    ? record.computerGateway as Record<string, unknown>
+    : {};
 
   return {
     completeOnboarding: record.completeOnboarding === true,
@@ -305,6 +353,18 @@ export const sanitizeDashboardConfig = (config: unknown): DashboardConfig => {
       autoUpgrade: record.updates && typeof record.updates === "object"
         ? (record.updates as Record<string, unknown>).autoUpgrade !== false
         : true,
+    },
+    computerGateway: {
+      enabled: computerGateway.enabled === true,
+      browserDriver: "agent-browser",
+      desktopDriver: "ode",
+      browserExecutable: asString(computerGateway.browserExecutable, "agent-browser") || "agent-browser",
+      desktopExecutable: computerGateway.desktopExecutable === "peekaboo"
+        ? "ode"
+        : asString(computerGateway.desktopExecutable, "ode") || "ode",
+      browserHeaded: computerGateway.browserHeaded === true,
+      commandTimeoutMs: asNumber(computerGateway.commandTimeoutMs, 30_000),
+      approvalTimeoutMs: asNumber(computerGateway.approvalTimeoutMs, 10 * 60_000),
     },
     agents: sanitizeAgents(record.agents),
     workspaces,

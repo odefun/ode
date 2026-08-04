@@ -48,6 +48,7 @@ export type AgentProvider = {
   cancelActiveRequest: (channelId: string, sessionId: string, directory?: string) => Promise<boolean>;
   ensureSession: (sessionId: string) => Promise<void>;
   subscribeToSession: (sessionId: string, handler: (event: unknown) => void) => () => void;
+  publishSessionEvent?: (sessionId: string, event: unknown) => void;
 };
 
 type AgentProviderRuntime = Omit<AgentProvider, "id" | "supportsEventStream">;

@@ -11,7 +11,8 @@
     parseStatusMessageFrequencyMs,
     toStatusMessageFrequencyValue,
   } from "$lib/localConfig";
-  import { Button, Card } from "$lib/components/ui";
+  import { onMount } from "svelte";
+  import { Badge, Button, Card } from "$lib/components/ui";
   import ToggleGroup from "$lib/components/ui/toggle-group.svelte";
   import { locale } from "$lib/i18n";
   import { localSettingStore } from "$lib/local-setting/store";
@@ -38,6 +39,67 @@
     { value: "on", label: "On" },
     { value: "off", label: "Off" },
   ];
+  const computerGatewayItems: Array<{ value: "on" | "off"; label: string }> = [
+    { value: "on", label: "On" },
+    { value: "off", label: "Off" },
+  ];
+
+  type ComputerSetupStatus = {
+    platform: string;
+    supported: boolean;
+    ready: boolean;
+    browser: { installed: boolean; ready: boolean; version?: string; error?: string };
+    desktop: {
+      installed: boolean;
+      ready: boolean;
+      version?: string;
+      appPath?: string;
+      error?: string;
+      permissions?: Array<{ name?: string; isGranted?: boolean }>;
+    };
+  };
+
+  let computerStatus: ComputerSetupStatus | null = null;
+  let computerBusy = false;
+  let computerMessage = "";
+
+  async function loadComputerStatus(): Promise<void> {
+    try {
+      const response = await fetch("/api/computer");
+      const payload = await response.json() as { ok?: boolean; error?: string; result?: ComputerSetupStatus };
+      if (!response.ok || !payload.ok || !payload.result) throw new Error(payload.error || "Status check failed");
+      computerStatus = payload.result;
+    } catch (error) {
+      computerMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  async function runComputerAction(action: string, extra: Record<string, unknown> = {}): Promise<void> {
+    computerBusy = true;
+    computerMessage = "";
+    try {
+      const response = await fetch("/api/computer", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action, ...extra }),
+      });
+      const payload = await response.json() as { ok?: boolean; error?: string };
+      if (!response.ok || !payload.ok) throw new Error(payload.error || "Computer setup failed");
+      computerMessage = action === "self-test"
+        ? t("Self-test completed.", "自检已完成。")
+        : t("Action completed. Rechecking permissions…", "操作已完成，正在重新检查权限……");
+      await loadComputerStatus();
+      if (action === "setup") await localSettingStore.loadConfig();
+    } catch (error) {
+      computerMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      computerBusy = false;
+    }
+  }
+
+  onMount(() => {
+    void loadComputerStatus();
+  });
 
   function parseStatusMessageFrequencySelection(value: string): StatusMessageFrequencyMs {
     return parseStatusMessageFrequencyMs(Number(value));
@@ -85,6 +147,16 @@
       },
     }));
   }
+
+  function handleComputerGatewayChange(nextValue: string): void {
+    localSettingStore.updateConfig((config: DashboardConfig) => ({
+      ...config,
+      computerGateway: {
+        ...config.computerGateway,
+        enabled: nextValue === "on",
+      },
+    }));
+  }
 </script>
 
 <Card className="p-5">
@@ -105,6 +177,87 @@
           value={$localSettingStore.config.user.defaultStatusMessageFormat}
           onValueChange={handleStatusFormatChange}
         />
+      </div>
+    </div>
+
+    <div class="grid gap-2">
+      <p class="text-sm font-medium">{t("Computer Gateway", "Computer Gateway")}</p>
+      <p class="text-xs text-[hsl(var(--muted-foreground))]">{t("Enables local browser automation and macOS control through Ode. Each channel must still be explicitly allowed in its workspace settings.", "启用 Ode 的本地浏览器自动化与 macOS 控制；仍需在工作区中逐频道授权。")}</p>
+      <div class="inline-block w-fit">
+        <ToggleGroup
+          items={computerGatewayItems}
+          value={$localSettingStore.config.computerGateway.enabled ? "on" : "off"}
+          onValueChange={handleComputerGatewayChange}
+        />
+      </div>
+
+      <div class="mt-2 grid gap-3 rounded-lg border p-4">
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="text-sm font-medium">{t("This Mac", "本机状态")}</span>
+          {#if computerStatus}
+            <Badge variant={computerStatus.ready ? "success" : "secondary"}>
+              {computerStatus.ready ? t("Ready", "已就绪") : t("Setup required", "需要设置")}
+            </Badge>
+          {:else}
+            <Badge variant="secondary">{t("Checking…", "检查中……")}</Badge>
+          {/if}
+        </div>
+
+        {#if computerStatus}
+          <div class="grid gap-2 text-xs text-[hsl(var(--muted-foreground))] sm:grid-cols-2">
+            <div class="rounded-md bg-[hsl(var(--muted)/0.45)] p-3">
+              <div class="mb-1 flex items-center justify-between gap-2">
+                <span class="font-medium text-[hsl(var(--foreground))]">{t("Browser", "浏览器")}</span>
+                <Badge variant={computerStatus.browser.ready ? "success" : "secondary"}>
+                  {computerStatus.browser.ready ? t("Ready", "已就绪") : t("Needs setup", "需要设置")}
+                </Badge>
+              </div>
+              <p>{computerStatus.browser.version || computerStatus.browser.error || t("agent-browser is not installed", "agent-browser 尚未安装")}</p>
+            </div>
+            <div class="rounded-md bg-[hsl(var(--muted)/0.45)] p-3">
+              <div class="mb-1 flex items-center justify-between gap-2">
+                <span class="font-medium text-[hsl(var(--foreground))]">Ode macOS</span>
+                <Badge variant={computerStatus.desktop.ready ? "success" : "secondary"}>
+                  {computerStatus.desktop.ready ? t("Authorized", "已授权") : t("Permission required", "需要授权")}
+                </Badge>
+              </div>
+              <p>{computerStatus.desktop.version || computerStatus.desktop.error || t("Ode.app is not installed", "Ode.app 尚未安装")}</p>
+              {#if computerStatus.desktop.appPath}<p class="mt-1 break-all">{computerStatus.desktop.appPath}</p>{/if}
+            </div>
+          </div>
+
+          {#if computerStatus.desktop.permissions?.length}
+            <div class="flex flex-wrap gap-2">
+              {#each computerStatus.desktop.permissions as permission}
+                <Badge variant={permission.isGranted ? "success" : "outline"}>
+                  {permission.name}: {permission.isGranted ? t("Allowed", "已允许") : t("Not allowed", "未允许")}
+                </Badge>
+              {/each}
+            </div>
+          {/if}
+        {/if}
+
+        <div class="flex flex-wrap gap-2">
+          <Button size="sm" disabled={computerBusy} on:click={() => void runComputerAction("setup")}>
+            {computerBusy ? t("Working…", "处理中……") : t("Set up Ode", "设置 Ode")}
+          </Button>
+          <Button size="sm" variant="outline" disabled={computerBusy || !computerStatus?.desktop.installed} on:click={() => void runComputerAction("request-permissions")}>
+            {t("Request permissions", "请求权限")}
+          </Button>
+          <Button size="sm" variant="outline" disabled={computerBusy || !computerStatus?.desktop.installed} on:click={() => void runComputerAction("open-settings", { kind: "screen-recording" })}>
+            {t("Screen Recording", "屏幕录制")}
+          </Button>
+          <Button size="sm" variant="outline" disabled={computerBusy || !computerStatus?.desktop.installed} on:click={() => void runComputerAction("open-settings", { kind: "accessibility" })}>
+            {t("Accessibility", "辅助功能")}
+          </Button>
+          <Button size="sm" variant="outline" disabled={computerBusy || !computerStatus?.desktop.ready} on:click={() => void runComputerAction("self-test")}>
+            {t("Run self-test", "运行自检")}
+          </Button>
+        </div>
+        <p class="text-xs text-[hsl(var(--muted-foreground))]">
+          {t("macOS shows one permission entry: Ode. Full Disk Access is not requested.", "macOS 权限列表只会显示 Ode；不会请求完全磁盘访问权限。")}
+        </p>
+        {#if computerMessage}<p class="text-xs">{computerMessage}</p>{/if}
       </div>
     </div>
 

@@ -50,6 +50,16 @@ const EMPTY_TEMPLATE: OdeConfig = {
     codebuddy: { enabled: true, models: [] },
     crush: { enabled: true, models: [] },
   },
+  computerGateway: {
+    enabled: false,
+    browserDriver: "agent-browser",
+    desktopDriver: "ode",
+    browserExecutable: "agent-browser",
+    desktopExecutable: "ode",
+    browserHeaded: false,
+    commandTimeoutMs: 30_000,
+    approvalTimeoutMs: 10 * 60_000,
+  },
   completeOnboarding: false,
   workspaces: [],
   updates: {

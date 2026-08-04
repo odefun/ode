@@ -1,6 +1,6 @@
 import { basename, dirname, join } from "path";
-import { mkdtemp, chmod, copyFile, rm, rename } from "fs/promises";
-import { tmpdir } from "os";
+import { mkdtemp, chmod, copyFile, mkdir, rm, rename, symlink } from "fs/promises";
+import { homedir, tmpdir } from "os";
 import { createHash } from "crypto";
 import { spawn } from "child_process";
 
@@ -77,8 +77,8 @@ function resolveAsset(): string {
   const arch = process.arch;
 
   if (platform === "darwin") {
-    if (arch === "arm64") return "ode-darwin-arm64";
-    if (arch === "x64") return "ode-darwin-x64";
+    if (arch === "arm64") return "ode-darwin-arm64.zip";
+    if (arch === "x64") return "ode-darwin-x64.zip";
   }
 
   if (platform === "linux") {
@@ -109,24 +109,14 @@ function runCodesign(args: string[]): Promise<{ code: number | null; stderr: str
   });
 }
 
-/**
- * macOS AMFI refuses to execute completely unsigned binaries. Bun's --compile
- * output is nominally ad-hoc signed, but a malformed LC_CODE_SIGNATURE slips
- * through sometimes and AMFI treats the binary as unsigned on exec. As a
- * defense-in-depth against broken release artifacts, strip any existing
- * signature and ad-hoc re-sign the downloaded binary before swapping it in.
- * Never fails loudly: if codesign is unavailable or refuses to cooperate we
- * still proceed, preserving prior behavior.
- */
-async function ensureMacAdhocSigned(binPath: string): Promise<void> {
-  if (process.platform !== "darwin") return;
-  // `codesign --remove-signature` fails if there is no signature at all; that
-  // is fine, we only care that the sign step below succeeds.
-  await runCodesign(["--remove-signature", binPath]);
-  const signed = await runCodesign(["--sign", "-", "--force", "--timestamp=none", binPath]);
-  if (signed.code !== 0) {
-    console.error(`Warning: failed to ad-hoc sign upgraded binary: ${signed.stderr.trim()}`);
-  }
+function runProcess(command: string, args: string[]): Promise<{ code: number | null; stderr: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, { stdio: ["ignore", "ignore", "pipe"] });
+    let stderr = "";
+    child.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
+    child.on("error", () => resolve({ code: -1, stderr }));
+    child.on("close", (code) => resolve({ code, stderr }));
+  });
 }
 
 export async function checkForUpdate(currentVersion: string): Promise<UpdateCheckResult> {
@@ -187,11 +177,17 @@ export async function performUpgrade(): Promise<{ latestVersion: string | null }
   const tempDir = await mkdtemp(join(tmpdir(), "ode-upgrade-"));
   const tempPath = join(tempDir, asset);
   await Bun.write(tempPath, data);
+  if (process.platform === "darwin") {
+    try {
+      await installMacAppUpgrade(tempPath, tempDir);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+    return { latestVersion };
+  }
   if (process.platform !== "win32") {
     await chmod(tempPath, 0o755);
   }
-  await ensureMacAdhocSigned(tempPath);
-
   try {
     const execPath = process.execPath;
     try {
@@ -223,4 +219,53 @@ export async function performUpgrade(): Promise<{ latestVersion: string | null }
   }
 
   return { latestVersion };
+}
+
+async function installMacAppUpgrade(archivePath: string, tempDir: string): Promise<void> {
+  const extracted = join(tempDir, "extracted");
+  await mkdir(extracted, { recursive: true });
+  const unpacked = await runProcess("/usr/bin/ditto", ["-x", "-k", archivePath, extracted]);
+  if (unpacked.code !== 0) throw new Error(`Failed to unpack Ode.app: ${unpacked.stderr.trim()}`);
+  const sourceApp = join(extracted, "Ode.app");
+  const verified = await runCodesign(["--verify", "--deep", "--strict", sourceApp]);
+  if (verified.code !== 0) throw new Error(`Ode.app signature verification failed: ${verified.stderr.trim()}`);
+
+  const marker = `${process.platform === "darwin" ? "/Ode.app/Contents/Resources/ode" : ""}`;
+  const currentExec = process.execPath;
+  const markerIndex = currentExec.indexOf(marker);
+  const destination = markerIndex >= 0
+    ? currentExec.slice(0, markerIndex + "/Ode.app".length)
+    : join(homedir(), "Applications", "Ode.app");
+  const destinationDir = dirname(destination);
+  const staged = join(destinationDir, `.Ode.app.installing-${process.pid}`);
+  const backup = join(destinationDir, `.Ode.app.backup-${process.pid}`);
+  await mkdir(destinationDir, { recursive: true });
+  await rm(staged, { recursive: true, force: true });
+  const copied = await runProcess("/usr/bin/ditto", [sourceApp, staged]);
+  if (copied.code !== 0) throw new Error(`Failed to stage Ode.app: ${copied.stderr.trim()}`);
+
+  let backedUp = false;
+  try {
+    if (await Bun.file(join(destination, "Contents", "Info.plist")).exists()) {
+      await rm(backup, { recursive: true, force: true });
+      await rename(destination, backup);
+      backedUp = true;
+    }
+    await rename(staged, destination);
+    if (backedUp) await rm(backup, { recursive: true, force: true });
+  } catch (error) {
+    if (!(await Bun.file(join(destination, "Contents", "Info.plist")).exists()) && backedUp) {
+      await rename(backup, destination);
+    }
+    throw error;
+  }
+
+  if (markerIndex < 0) {
+    // Migrate legacy standalone installs to the single Ode.app bundle while
+    // preserving the command path the user already has on PATH.
+    const nextLink = `${currentExec}.new`;
+    await rm(nextLink, { force: true });
+    await symlink(join(destination, "Contents", "Resources", "ode"), nextLink);
+    await rename(nextLink, currentExec);
+  }
 }

@@ -5,6 +5,49 @@ import { GIT_STRATEGY_VALUES, STATUS_MESSAGE_FORMAT_VALUES } from "../baseConfig
 
 const DEFAULT_UPDATE_INTERVAL_MS = 60 * 60 * 1000;
 
+const DEFAULT_COMPUTER_GATEWAY = {
+  enabled: false,
+  browserDriver: "agent-browser" as const,
+  desktopDriver: "ode" as const,
+  browserExecutable: "agent-browser",
+  desktopExecutable: "ode",
+  browserHeaded: false,
+  commandTimeoutMs: 30_000,
+  approvalTimeoutMs: 10 * 60_000,
+};
+
+export const computerGatewaySchema = z.object({
+  enabled: z.boolean().optional().default(false),
+  browserDriver: z.literal("agent-browser").optional().default("agent-browser"),
+  desktopDriver: z.preprocess((value) => value === "peekaboo" ? "ode" : value, z.literal("ode").optional().default("ode")),
+  browserExecutable: z.string().optional().default("agent-browser"),
+  desktopExecutable: z.preprocess((value) => value === "peekaboo" ? "ode" : value, z.string().optional().default("ode")),
+  browserHeaded: z.boolean().optional().default(false),
+  commandTimeoutMs: z.number().int().min(1_000).max(10 * 60_000).optional().default(30_000),
+  approvalTimeoutMs: z.number().int().min(10_000).max(60 * 60_000).optional().default(10 * 60_000),
+});
+
+const DEFAULT_CHANNEL_COMPUTER_USE = {
+  browser: "off" as const,
+  desktop: "off" as const,
+  browserProfile: "",
+  allowedOrigins: ["http://localhost:*", "http://127.0.0.1:*"],
+  allowedApps: [] as string[],
+  approvalPolicy: "consequential" as const,
+};
+
+export const channelComputerUseSchema = z.object({
+  browser: z.enum(["off", "observe", "interact"]).optional().default("off"),
+  desktop: z.enum(["off", "observe", "control"]).optional().default("off"),
+  browserProfile: z.string().optional().default(""),
+  allowedOrigins: z.array(z.string()).optional().default([
+    "http://localhost:*",
+    "http://127.0.0.1:*",
+  ]),
+  allowedApps: z.array(z.string()).optional().default([]),
+  approvalPolicy: z.enum(["consequential", "always", "never"]).optional().default("consequential"),
+});
+
 const userSchema = z.object({
   name: z.string().optional().default(""),
   email: z.string().optional().default(""),
@@ -83,6 +126,7 @@ const channelDetailSchema = z.object({
   workingDirectory: z.string().optional().default(""),
   baseBranch: z.string().optional().default("main"),
   channelSystemMessage: z.string().optional().default(""),
+  computerUse: channelComputerUseSchema.optional().default(DEFAULT_CHANNEL_COMPUTER_USE),
 });
 
 const updateSchema = z.object({
@@ -122,6 +166,7 @@ export const odeConfigSchema = z.object({
     .optional()
     .default({}),
   agents: agentsSchema,
+  computerGateway: computerGatewaySchema.optional().default(DEFAULT_COMPUTER_GATEWAY),
   completeOnboarding: z.boolean().optional().default(false),
   workspaces: z.array(workspaceSchema),
   updates: updateSchema.optional().default({
@@ -135,5 +180,7 @@ export type WorkspaceConfig = z.infer<typeof workspaceSchema>;
 export type AgentProvider = z.infer<typeof agentProviderSchema>;
 export type AgentsConfig = z.infer<typeof agentsSchema>;
 export type UpdateConfig = z.infer<typeof updateSchema>;
+export type ComputerGatewayConfig = z.infer<typeof computerGatewaySchema>;
+export type ChannelComputerUseConfig = z.infer<typeof channelComputerUseSchema>;
 export type OdeConfig = z.infer<typeof odeConfigSchema>;
 export type UserConfig = z.infer<typeof userSchema>;

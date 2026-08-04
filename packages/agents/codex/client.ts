@@ -447,6 +447,10 @@ export async function sendMessage(
 
 export const ensureSession = runtime.ensureSession.bind(runtime);
 
+export function publishSessionEvent(sessionId: string, event: unknown): void {
+  runtime.publishSessionEvent(sessionId, event);
+}
+
 export const subscribeToSession = runtime.subscribeToSession.bind(runtime);
 
 export async function abortSession(sessionId: string): Promise<void> {

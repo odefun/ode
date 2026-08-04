@@ -6,6 +6,7 @@ import {
 import { spawn, type ChildProcess } from "child_process";
 import { BoundedSet, extractEventSessionId, log } from "@/utils";
 import { getOpenCodeModels, setOpenCodeModels } from "@/config";
+import { COMPUTER_GATEWAY_ENV, getOdeComputerMcpCommand } from "@/computer";
 import {
   extractOpenCodeChildSession,
   getOpenCodeEventFingerprint,
@@ -34,6 +35,13 @@ interface SessionInstance {
   baseUrl: string;
 }
 
+type ManagedServerInstance = {
+  process: ChildProcess | null;
+  startPromise: Promise<string> | null;
+  url: string | null;
+  lastUsedAt: number;
+};
+
 export type OpenCodeSessionRuntimeSnapshot = {
   rootSessionId: string;
   relatedSessionIds: string[];
@@ -56,9 +64,7 @@ class OpenCodeServerRuntimeState {
   readonly sessionStartPromises = new Map<string, Promise<SessionInstance>>();
   readonly sessionEnvironments = new Map<string, SessionEnvironment>();
   readonly clientByBaseUrl = new Map<string, OpencodeClient>();
-  managedServerProcess: ChildProcess | null = null;
-  serverStartPromise: Promise<void> | null = null;
-  managedServerUrl: string | null = null;
+  readonly managedServers = new Map<string, ManagedServerInstance>();
   cleanupInterval: ReturnType<typeof setInterval> | null = null;
 }
 
@@ -75,13 +81,17 @@ const pendingOpenCodePermissions = new Map<string, PendingOpenCodePermission>();
 
 const LISTENING_URL_REGEX = /opencode server listening on\s+(https?:\/\/\S+)/i;
 
-function resolveServerUrl(): string {
-  return runtimeState.managedServerUrl ?? "http://127.0.0.1:4096";
+function getServerKey(env?: SessionEnvironment): string {
+  return env?.[COMPUTER_GATEWAY_ENV.contextId] || "default";
 }
 
-function resolveServerUrlForEnv(env?: SessionEnvironment): string {
-  void env;
-  return resolveServerUrl();
+function getManagedServer(env?: SessionEnvironment): ManagedServerInstance {
+  const key = getServerKey(env);
+  const existing = runtimeState.managedServers.get(key);
+  if (existing) return existing;
+  const created: ManagedServerInstance = { process: null, startPromise: null, url: null, lastUsedAt: Date.now() };
+  runtimeState.managedServers.set(key, created);
+  return created;
 }
 
 function getClientForBaseUrl(baseUrl: string): OpencodeClient {
@@ -209,23 +219,30 @@ async function syncModelsFromServer(baseUrl: string): Promise<void> {
   }
 }
 
-async function ensureServerStarted(): Promise<void> {
-  if (runtimeState.managedServerProcess && runtimeState.managedServerProcess.exitCode === null) {
-    return;
+async function ensureServerStarted(env: SessionEnvironment = {}): Promise<string> {
+  const serverKey = getServerKey(env);
+  const managed = getManagedServer(env);
+  managed.lastUsedAt = Date.now();
+  if (managed.process && managed.process.exitCode === null && managed.url) {
+    return managed.url;
   }
-  if (runtimeState.serverStartPromise) {
-    await runtimeState.serverStartPromise;
-    return;
+  if (managed.startPromise) {
+    return await managed.startPromise;
   }
 
   const { command, args } = getServerCommand();
-  runtimeState.serverStartPromise = (async () => {
-    log.debug("Starting managed OpenCode server", { command: [command, ...args].join(" ") });
+  managed.startPromise = (async () => {
+    const childEnv = buildOpenCodeServerEnvironment(env);
+    log.debug("Starting managed OpenCode server", {
+      command: [command, ...args].join(" "),
+      serverKey,
+      computerGateway: serverKey !== "default",
+    });
     const processHandle = spawn(command, args, {
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env },
+      env: childEnv,
     });
-    runtimeState.managedServerProcess = processHandle;
+    managed.process = processHandle;
 
     const discoveredUrl = new Promise<string>((resolve, reject) => {
       const onData = (chunk: Buffer) => {
@@ -249,24 +266,71 @@ async function ensureServerStarted(): Promise<void> {
       log.debug("OpenCode server stderr", { message: chunk.toString().trim() });
     });
     processHandle.on("exit", (code, signal) => {
-      log.warn("Managed OpenCode server exited", { code, signal });
-      if (runtimeState.managedServerProcess === processHandle) {
-        runtimeState.managedServerProcess = null;
+      log.warn("Managed OpenCode server exited", { code, signal, serverKey });
+      if (managed.process === processHandle) {
+        managed.process = null;
+        managed.url = null;
       }
     });
 
     const discoveredBaseUrl = await discoveredUrl;
-    runtimeState.managedServerUrl = discoveredBaseUrl;
+    managed.url = discoveredBaseUrl;
     await waitForServerReady(discoveredBaseUrl);
     await syncModelsFromServer(discoveredBaseUrl);
-    log.debug("Managed OpenCode server ready", { baseUrl: discoveredBaseUrl });
+    log.debug("Managed OpenCode server ready", { baseUrl: discoveredBaseUrl, serverKey });
+    return discoveredBaseUrl;
   })();
 
   try {
-    await runtimeState.serverStartPromise;
+    return await managed.startPromise;
+  } catch (error) {
+    if (managed.process && managed.process.exitCode === null) managed.process.kill("SIGTERM");
+    managed.process = null;
+    managed.url = null;
+    throw error;
   } finally {
-    runtimeState.serverStartPromise = null;
+    managed.startPromise = null;
   }
+}
+
+function buildOpenCodeServerEnvironment(env: SessionEnvironment): NodeJS.ProcessEnv {
+  const contextId = env[COMPUTER_GATEWAY_ENV.contextId];
+  if (!contextId) return { ...process.env, ...env };
+  let content: Record<string, unknown> = {};
+  const existing = process.env.OPENCODE_CONFIG_CONTENT?.trim();
+  if (existing) {
+    try {
+      const parsed = JSON.parse(existing);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) content = parsed;
+    } catch {
+      log.warn("Ignoring invalid OPENCODE_CONFIG_CONTENT while adding Ode Computer MCP");
+    }
+  }
+  const existingMcp = content.mcp && typeof content.mcp === "object" && !Array.isArray(content.mcp)
+    ? content.mcp as Record<string, unknown>
+    : {};
+  content = {
+    ...content,
+    mcp: {
+      ...existingMcp,
+      "ode-computer": {
+        type: "local",
+        command: getOdeComputerMcpCommand(),
+        environment: {
+          [COMPUTER_GATEWAY_ENV.contextId]: contextId,
+          [COMPUTER_GATEWAY_ENV.url]: env[COMPUTER_GATEWAY_ENV.url] ?? "",
+          [COMPUTER_GATEWAY_ENV.token]: env[COMPUTER_GATEWAY_ENV.token] ?? "",
+        },
+        enabled: true,
+        timeout: 10 * 60_000,
+      },
+    },
+  };
+  return {
+    ...process.env,
+    ...env,
+    OPENCODE_CONFIG_CONTENT: JSON.stringify(content),
+  };
 }
 
 // Cleanup inactive sessions after 10 minutes
@@ -286,6 +350,22 @@ function ensureCleanupInterval(): void {
       ) {
         log.debug("Cleaning up inactive session", { sessionId });
         stopSessionInstance(sessionId);
+      }
+    }
+    const activeBaseUrls = new Set(
+      Array.from(runtimeState.sessionInstances.values()).map((session) => session.baseUrl),
+    );
+    for (const [serverKey, managed] of runtimeState.managedServers) {
+      if (
+        serverKey !== "default"
+        && managed.url
+        && !activeBaseUrls.has(managed.url)
+        && now - managed.lastUsedAt > INACTIVE_TIMEOUT_MS
+      ) {
+        if (managed.process && managed.process.exitCode === null) managed.process.kill("SIGTERM");
+        runtimeState.clientByBaseUrl.delete(managed.url);
+        runtimeState.managedServers.delete(serverKey);
+        log.debug("Stopped inactive OpenCode Computer Gateway server", { serverKey });
       }
     }
   }, 60_000); // Check every minute
@@ -317,8 +397,7 @@ async function getOrCreateSessionInstance(
   // Create new instance
   const promise = (async () => {
     try {
-      await ensureServerStarted();
-      const baseUrl = resolveServerUrlForEnv(env);
+      const baseUrl = await ensureServerStarted(env);
       log.debug("Using OpenCode server for session", { sessionId, baseUrl });
       const client = getClientForBaseUrl(baseUrl);
       const sessionInstance: SessionInstance = {
@@ -564,8 +643,7 @@ export async function createSessionInstance(envOverrides?: SessionEnvironment): 
   register: (sessionId: string, env?: SessionEnvironment) => void;
 }> {
   const env = envOverrides ?? {};
-  await ensureServerStarted();
-  const baseUrl = resolveServerUrlForEnv(env);
+  const baseUrl = await ensureServerStarted(env);
   const client = getClientForBaseUrl(baseUrl);
   log.debug("Using OpenCode server for new session", { baseUrl });
 
@@ -573,7 +651,7 @@ export async function createSessionInstance(envOverrides?: SessionEnvironment): 
     client,
     register: (sessionId: string, sessionEnv: SessionEnvironment = env) => {
       const normalizedEnv = sessionEnv ?? {};
-      const normalizedBaseUrl = resolveServerUrlForEnv(normalizedEnv);
+      const normalizedBaseUrl = baseUrl;
       const sessionInstance: SessionInstance = {
         client: getClientForBaseUrl(normalizedBaseUrl),
         handlers: new Set(),
@@ -684,6 +762,19 @@ export function subscribeToSession(
   };
 }
 
+export function publishSessionEvent(sessionId: string, event: unknown): void {
+  const session = runtimeState.sessionInstances.get(sessionId);
+  if (!session) return;
+  const wrapped = { payload: event };
+  for (const handler of session.handlers) {
+    try {
+      handler(wrapped);
+    } catch (error) {
+      log.warn("OpenCode session subscriber failed", { sessionId, error: String(error) });
+    }
+  }
+}
+
 // Ensure session instance exists (call before sending messages)
 export async function ensureSession(sessionId: string): Promise<void> {
   await getOrCreateSessionInstance(sessionId);
@@ -746,7 +837,8 @@ export function stopAllSessions(): void {
 
 // Get URL from any available instance
 export async function getAnyServerUrl(): Promise<string> {
-  return resolveServerUrl();
+  const existing = Array.from(runtimeState.managedServers.values()).find((server) => server.url)?.url;
+  return existing ?? await ensureServerStarted();
 }
 
 export async function startServer(): Promise<void> {
@@ -755,14 +847,14 @@ export async function startServer(): Promise<void> {
 
 export async function stopServer(): Promise<void> {
   stopAllSessions();
-  if (runtimeState.managedServerProcess && runtimeState.managedServerProcess.exitCode === null) {
-    runtimeState.managedServerProcess.kill("SIGTERM");
+  for (const managed of runtimeState.managedServers.values()) {
+    if (managed.process && managed.process.exitCode === null) managed.process.kill("SIGTERM");
   }
-  runtimeState.managedServerProcess = null;
-  runtimeState.serverStartPromise = null;
-  runtimeState.managedServerUrl = null;
+  runtimeState.managedServers.clear();
 }
 
 export function isServerReady(): boolean {
-  return Boolean(runtimeState.managedServerProcess && runtimeState.managedServerProcess.exitCode === null);
+  return Array.from(runtimeState.managedServers.values()).some(
+    (managed) => Boolean(managed.process && managed.process.exitCode === null),
+  );
 }

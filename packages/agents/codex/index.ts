@@ -6,6 +6,7 @@ export {
   abortSession,
   ensureSession,
   subscribeToSession,
+  publishSessionEvent,
   startServer,
   stopServer,
   replyToQuestion,

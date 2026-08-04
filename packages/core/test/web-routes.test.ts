@@ -67,6 +67,19 @@ describe("web app routing", () => {
     expect(payload.error?.startsWith("Missing Slack")).toBe(true);
   });
 
+  it("rejects unknown Computer Gateway actions", async () => {
+    const app = createWebApp();
+    const response = await app.handle(new Request("http://localhost/api/computer", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "grant-without-consent" }),
+    }));
+    expect(response.status).toBe(400);
+    const payload = await response.json() as { ok: boolean; error?: string };
+    expect(payload.ok).toBe(false);
+    expect(payload.error).toBe("Unknown Computer Gateway action");
+  });
+
   it("returns paginated message threads and a thread's detail timeline", async () => {
     clearMessageStoreForTests();
     const threadKey = buildThreadKey("C-web", "T-web");

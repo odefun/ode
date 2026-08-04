@@ -82,6 +82,30 @@ Settings UI can be accessible via http://127.0.0.1:9293 or use `/setting` comman
 3. @ your bot with the prompt you want, optionally with image or file attachments.
 4. The bot will process your message with the coding agent.
 
+## Computer Gateway (local)
+
+Ode can expose the same policy-controlled browser and macOS desktop tools to Codex, Claude Code, and OpenCode. Browser automation uses a local, pinned [`agent-browser`](https://github.com/vercel-labs/agent-browser) installation. Desktop capture and control run inside the signed `Ode.app`; there is no cloud browser or separately authorized desktop provider.
+
+1. Run `ode computer setup`, or choose **Set up Ode** under Settings → General → Computer Gateway. Ode installs the browser driver and registers `Ode.app` on macOS.
+2. Allow **Ode** under Screen & System Audio Recording and Accessibility when macOS asks. These are the only two required macOS permissions; Full Disk Access is not requested. Run `ode computer permissions --request` to show the prompts again, or use `ode computer open-settings <screen-recording|accessibility>`.
+3. In the workspace channel settings, choose browser `Observe` or `Interact`, desktop `Observe` or `Control`, then configure allowed origins/apps and an approval policy. The CLI equivalent starts with `ode computer enable --channel <channelId>` (safe default: browser observe-only).
+4. Verify installation, permissions, screen capture, and Accessibility probing with `ode computer doctor` or `ode computer self-test`; inspect the active policy with `ode computer status`.
+
+The gateway listens only on loopback, authenticates every provider call with a per-context token, rejects origins/apps outside each channel's allowlist, invalidates stale observations before actions, serializes desktop control, and sends approval requests back to the originating IM thread. Audit records are written to `~/.config/ode/computer-audit.jsonl` without action values.
+
+### macOS release credentials
+
+Release builds require a Developer ID Application identity and Apple notarization. Configure these GitHub Actions secrets before publishing a release:
+
+- `MACOS_CERTIFICATE_P12`: base64-encoded PKCS#12 identity.
+- `MACOS_CERTIFICATE_PASSWORD`: PKCS#12 export password.
+- `MACOS_CODESIGN_IDENTITY`: the full Developer ID Application identity name.
+- `APPLE_NOTARIZATION_ID`: Apple Account email used for notarization.
+- `APPLE_NOTARIZATION_PASSWORD`: app-specific password for `notarytool`, not the Apple Account password.
+- `APPLE_TEAM_ID`: Apple Developer Team ID.
+
+The release workflow signs every nested executable, submits the app archive to Apple's notary service, staples the accepted ticket to `Ode.app`, validates it with `stapler` and Gatekeeper, and only then creates the published zip.
+
 ## Worktrees
 
 - Each slack thread uses a dedicated git worktree at `<repoRoot>/.worktree/<threadId>`

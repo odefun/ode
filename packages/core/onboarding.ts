@@ -318,6 +318,14 @@ async function setupWorkspaces(rl: Interface, config: OdeConfig): Promise<OdeCon
           agentProvider: channel.agentProvider ?? "opencode",
           baseBranch: channel.baseBranch?.trim() || "main",
           channelSystemMessage: channel.channelSystemMessage ?? "",
+          computerUse: channel.computerUse ?? {
+            browser: "off",
+            desktop: "off",
+            browserProfile: "",
+            allowedOrigins: ["http://localhost:*", "http://127.0.0.1:*"],
+            allowedApps: [],
+            approvalPolicy: "consequential",
+          },
         })),
       };
       const existingWorkspace = nextConfig.workspaces.find((item) => item.id === workspace.id);

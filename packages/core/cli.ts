@@ -13,6 +13,7 @@ import { handleCronCommand } from "@/core/cli-handlers/cron";
 import { handleSendCommand } from "@/core/cli-handlers/send";
 import { handleMessagesCommand } from "@/core/cli-handlers/messages";
 import { handleReactionCommand } from "@/core/cli-handlers/reaction";
+import { handleComputerCommand } from "@/core/cli-handlers/computer";
 import { isInstalledBinary, performUpgrade } from "@/core/upgrade";
 
 const rawArgs = process.argv.slice(2);
@@ -55,6 +56,7 @@ function printHelp(): void {
       "  ode send <subcommand>    # upload files/images to a chat channel",
       "  ode messages <subcommand> # fetch thread messages",
       "  ode reaction <subcommand> # add reactions to messages",
+      "  ode computer <subcommand> # configure local browser/macOS computer use",
       "  ode upgrade",
       "  ode --version",
       "",
@@ -527,6 +529,11 @@ if (command === "messages") {
 
 if (command === "reaction") {
   const code = await handleReactionCommand(args.slice(1));
+  process.exit(code);
+}
+
+if (command === "computer") {
+  const code = await handleComputerCommand(args.slice(1));
   process.exit(code);
 }
 

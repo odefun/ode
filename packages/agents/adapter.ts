@@ -11,6 +11,11 @@ import {
   buildStatusMessageByProvider,
 } from "@/utils/status";
 import { getAgentCapabilities, getAgentTransport } from "./capabilities";
+import {
+  createComputerGatewayBinding,
+  registerComputerContext,
+  replyToComputerApproval,
+} from "@/computer";
 
 /**
  * Session → provider index. Intentionally unbounded: this map is used by
@@ -74,8 +79,23 @@ export function createAgentAdapter(options: AgentAdapterOptions = {}): AgentAdap
     async getOrCreateSession(channelId, threadId, cwd, env) {
       const providerId = resolveProviderForChannel(channelId);
       const provider = getAgentProvider(providerId);
-      const result = await provider.getOrCreateSession(channelId, threadId, cwd, env);
+      const computerBinding = await createComputerGatewayBinding({ channelId, threadId, cwd, providerId });
+      const result = await provider.getOrCreateSession(channelId, threadId, cwd, {
+        ...env,
+        ...computerBinding.env,
+      });
       rememberSessionProvider(result.sessionId, providerId);
+      if (computerBinding.contextId) {
+        registerComputerContext({
+          contextId: computerBinding.contextId,
+          channelId,
+          threadId,
+          sessionId: result.sessionId,
+          cwd,
+          providerId,
+          publishEvent: (event) => provider.publishSessionEvent?.(result.sessionId, event),
+        });
+      }
       return result;
     },
     async sendMessage(channelId, sessionId, message, cwd, options, context) {
@@ -105,6 +125,9 @@ export function createAgentAdapter(options: AgentAdapterOptions = {}): AgentAdap
       return provider.subscribeToSession(sessionId, handler);
     },
     async replyToQuestion({ requestId, sessionId, directory, answers }) {
+      if (replyToComputerApproval({ requestId, sessionId, answers })) {
+        return;
+      }
       const providerId = getProviderForSession(sessionId);
       if (providerId === "claudecode") {
         await replyToClaudeQuestion({ sessionId, requestId, answers });

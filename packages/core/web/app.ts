@@ -11,6 +11,7 @@ import { registerTaskRoutes } from "./routes/tasks";
 import { registerSendRoutes } from "./routes/send";
 import { registerMessagesRoutes } from "./routes/messages";
 import { registerReactionsRoutes } from "./routes/reactions";
+import { registerComputerRoutes } from "./routes/computer";
 
 export function createWebApp(): Elysia {
   const app = new Elysia();
@@ -40,6 +41,7 @@ export function createWebApp(): Elysia {
   registerSendRoutes(app);
   registerMessagesRoutes(app);
   registerReactionsRoutes(app);
+  registerComputerRoutes(app);
 
   app.all("*", async ({ request }: { request: Request }) => {
     return serveStaticAsset(request);

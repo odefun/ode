@@ -15,6 +15,7 @@
   import { getSelectedWorkspace, getWorkspacePath, getWorkspaceRouteKey } from "$lib/local-setting/workspaces";
 
   type AgentProvider = AgentProviderId;
+  type ChannelComputerUse = NonNullable<DashboardConfig["workspaces"][number]["channelDetails"][number]["computerUse"]>;
 
   const agentProviders = AGENT_PROVIDERS;
 
@@ -204,6 +205,55 @@
 
   function onChannelSystemMessageInput(workspaceId: string, channelId: string, event: Event): void {
     onChannelSystemMessageChange(workspaceId, channelId, (event.currentTarget as HTMLTextAreaElement).value);
+  }
+
+  function getComputerUse(channel: DashboardConfig["workspaces"][number]["channelDetails"][number]): ChannelComputerUse {
+    return channel.computerUse ?? {
+      browser: "off",
+      desktop: "off",
+      browserProfile: "",
+      allowedOrigins: ["http://localhost:*", "http://127.0.0.1:*"],
+      allowedApps: [],
+      approvalPolicy: "consequential",
+    };
+  }
+
+  function updateComputerUse(
+    workspaceId: string,
+    channelId: string,
+    updater: (current: ChannelComputerUse) => ChannelComputerUse
+  ): void {
+    localSettingStore.updateWorkspace(workspaceId, (workspace) => ({
+      ...workspace,
+      channelDetails: workspace.channelDetails.map((channel) =>
+        channel.id === channelId
+          ? { ...channel, computerUse: updater(getComputerUse(channel)) }
+          : channel
+      ),
+    }));
+  }
+
+  function onComputerSelect(
+    workspaceId: string,
+    channelId: string,
+    field: "browser" | "desktop" | "approvalPolicy",
+    event: Event
+  ): void {
+    const value = (event.currentTarget as HTMLSelectElement).value;
+    updateComputerUse(workspaceId, channelId, (current) => ({ ...current, [field]: value }) as ChannelComputerUse);
+  }
+
+  function onComputerList(
+    workspaceId: string,
+    channelId: string,
+    field: "allowedOrigins" | "allowedApps",
+    event: Event
+  ): void {
+    const values = (event.currentTarget as HTMLTextAreaElement).value
+      .split(/[\n,]/)
+      .map((value) => value.trim())
+      .filter(Boolean);
+    updateComputerUse(workspaceId, channelId, (current) => ({ ...current, [field]: values }));
   }
 
   function getDuplicateWorkspaceIds(workspaces: DashboardConfig["workspaces"]): Set<string> {
@@ -516,6 +566,73 @@
                   placeholder={t("Appended to the system prompt for this channel", "将附加到此频道的系统提示词")}
                   on:input={(event) => onChannelSystemMessageInput(selectedWorkspace.id, channel.id, event)}
                 ></Textarea>
+              </div>
+
+              <div class="grid gap-3 rounded-md border border-[hsl(var(--border)/0.65)] p-3">
+                <div>
+                  <p class="text-sm font-medium">{t("Computer use", "Computer Use")}</p>
+                  <p class="text-xs text-[hsl(var(--muted-foreground))]">{t("Fail-closed per-channel access for OpenCode, Claude Code, and Codex through Ode's local Computer Gateway.", "通过 Ode 本地 Computer Gateway 为 OpenCode、Claude Code 和 Codex 提供按频道、默认关闭的访问控制。")}</p>
+                </div>
+                <div class="grid gap-3 md:grid-cols-3">
+                  <div class="grid gap-2">
+                    <Label for={`computer-browser-${channel.id}`}>{t("Browser", "浏览器")}</Label>
+                    <Select
+                      id={`computer-browser-${channel.id}`}
+                      value={getComputerUse(channel).browser}
+                      on:change={(event) => onComputerSelect(selectedWorkspace.id, channel.id, "browser", event)}
+                    >
+                      <option value="off">Off</option>
+                      <option value="observe">Observe</option>
+                      <option value="interact">Interact</option>
+                    </Select>
+                  </div>
+                  <div class="grid gap-2">
+                    <Label for={`computer-desktop-${channel.id}`}>{t("macOS desktop", "macOS 桌面")}</Label>
+                    <Select
+                      id={`computer-desktop-${channel.id}`}
+                      value={getComputerUse(channel).desktop}
+                      on:change={(event) => onComputerSelect(selectedWorkspace.id, channel.id, "desktop", event)}
+                    >
+                      <option value="off">Off</option>
+                      <option value="observe">Observe</option>
+                      <option value="control">Control</option>
+                    </Select>
+                  </div>
+                  <div class="grid gap-2">
+                    <Label for={`computer-approval-${channel.id}`}>{t("Approval", "审批")}</Label>
+                    <Select
+                      id={`computer-approval-${channel.id}`}
+                      value={getComputerUse(channel).approvalPolicy}
+                      on:change={(event) => onComputerSelect(selectedWorkspace.id, channel.id, "approvalPolicy", event)}
+                    >
+                      <option value="consequential">Consequential</option>
+                      <option value="always">Always</option>
+                      <option value="never">Never</option>
+                    </Select>
+                  </div>
+                </div>
+                <div class="grid gap-3 md:grid-cols-2">
+                  <div class="grid gap-2">
+                    <Label for={`computer-origins-${channel.id}`}>{t("Allowed origins", "允许的 Origin")}</Label>
+                    <Textarea
+                      id={`computer-origins-${channel.id}`}
+                      rows="3"
+                      value={getComputerUse(channel).allowedOrigins.join("\n")}
+                      placeholder="http://localhost:*"
+                      on:input={(event) => onComputerList(selectedWorkspace.id, channel.id, "allowedOrigins", event)}
+                    ></Textarea>
+                  </div>
+                  <div class="grid gap-2">
+                    <Label for={`computer-apps-${channel.id}`}>{t("Allowed macOS apps", "允许的 macOS App")}</Label>
+                    <Textarea
+                      id={`computer-apps-${channel.id}`}
+                      rows="3"
+                      value={getComputerUse(channel).allowedApps.join("\n")}
+                      placeholder="Safari"
+                      on:input={(event) => onComputerList(selectedWorkspace.id, channel.id, "allowedApps", event)}
+                    ></Textarea>
+                  </div>
+                </div>
               </div>
             </div>
           {/if}
